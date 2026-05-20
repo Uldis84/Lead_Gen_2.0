@@ -115,6 +115,7 @@ textarea{resize:vertical;line-height:1.6}
     <div class="nav-label">Outreach</div>
     <button class="nav-item active" id="nav-queue" onclick="openView('queue')"><span class="nav-icon">Q</span>Queue<span class="nav-badge" id="queue-badge">0</span></button>
     <button class="nav-item" id="nav-find" onclick="openView('find')"><span class="nav-icon">S</span>Find Leads</button>
+    <button class="nav-item" id="nav-contacts" onclick="openView('contacts')"><span class="nav-icon">@</span>Add Emails<span class="nav-badge" id="contacts-badge" style="display:none">0</span></button>
   </div>
   <div class="nav-group">
     <div class="nav-label">Tracking</div>
@@ -163,8 +164,18 @@ textarea{resize:vertical;line-height:1.6}
     </div>
     <div id="sresults"><div class="empty"><div class="empty-icon">S</div><div style="font-size:14px;color:var(--txt);opacity:.5">Choose a niche or enter a keyword</div></div></div>
   </div>
+  <div class="view" id="view-contacts">
+    <div class="eyebrow">Contact Info</div>
+    <div class="section-title">Add Emails / Instagram</div>
+    <div class="section-sub">Leads missing a contact — add email or @handle to enable sending</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+      <button class="btn btn-p btn-sm" onclick="saveAllContacts()">Save All</button>
+      <button class="btn btn-s btn-sm" onclick="renderContacts()">Refresh</button>
+      <div id="contacts-saved" style="font-size:12px;color:var(--gr);display:none">✓ All saved</div>
+    </div>
+    <div id="contacts-list"></div>
+  </div>
   <div class="view" id="view-pipeline">
-    <div class="eyebrow">CRM</div><div class="section-title">Pipeline</div><div class="section-sub">Every lead from first contact to client</div>
     <div class="pipeline-cols" id="pipeline-board"></div>
   </div>
   <div class="view" id="view-sent">
@@ -339,6 +350,10 @@ function init(){
   checkWeekend();
   renderQueue();
   renderStats();
+  // Show badge for missing contacts
+  var missing=leads.filter(function(l){return !l.contact;}).length;
+  var badge=document.getElementById('contacts-badge');
+  if(badge){badge.textContent=missing;badge.style.display=missing>0?'inline':'none';}
 }
 
 function checkReset(){
@@ -376,6 +391,87 @@ function openView(v){
   var nb=document.getElementById('nav-'+v);if(nb)nb.classList.add('active');
   if(v==='pipeline')renderPipeline();
   if(v==='sent')renderSent();
+  if(v==='contacts')renderContacts();
+}
+
+function renderContacts(){
+  // Show ALL leads — those with contact editable, those without highlighted
+  var missing = leads.filter(function(l){ return !l.contact; });
+  var hasBadge = document.getElementById('contacts-badge');
+  if(hasBadge){ hasBadge.textContent=missing.length; hasBadge.style.display=missing.length>0?'inline':'none'; }
+
+  if(!leads.length){
+    document.getElementById('contacts-list').innerHTML='<div style="text-align:center;padding:40px;color:var(--muted)">No leads yet — import some first</div>';
+    return;
+  }
+
+  var html='<div style="display:grid;gap:6px">';
+  leads.forEach(function(l){
+    var noContact = !l.contact;
+    html+='<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--s1);border:1px solid '+(noContact?'var(--yw-b)':'var(--b1)')+';border-radius:9px">';
+
+    // Thumb + name
+    if(l.thumb) html+='<img src="'+esc(l.thumb)+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0">';
+    else html+='<div style="width:32px;height:32px;border-radius:50%;background:var(--b1);flex-shrink:0"></div>';
+
+    html+='<div style="flex:1;min-width:0">';
+    html+='<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(l.name)+'</div>';
+    html+='<div style="font-size:11px;color:var(--muted)">'+fmtN(l.subs)+' subs</div>';
+    if(l.link) html+='<a href="'+esc(l.link)+'" target="_blank" style="font-size:11px;color:var(--blue)">View Channel ↗</a>';
+    html+='</div>';
+
+    // Contact input
+    html+='<div style="display:flex;align-items:center;gap:7px">';
+    if(noContact) html+='<span style="font-size:10px;color:var(--yw);background:var(--yw-bg);padding:2px 7px;border-radius:10px;border:1px solid var(--yw-b);white-space:nowrap">Missing</span>';
+    html+='<input type="text" id="ci-'+l.id+'" value="'+esc(l.contact||'')+'" placeholder="email@... or @handle"'
+      +' style="width:220px;padding:7px 10px;font-size:12px;background:var(--bg);border:1px solid '+(noContact?'var(--yw-b)':'var(--b2)')+';"'
+      +' onkeydown="if(event.key===\'Enter\')saveContact(\''+l.id+'\')">';
+    html+='<button class="btn btn-s btn-sm" style="padding:6px 10px;font-size:11px" onclick="saveContact(\''+l.id+'\')">Save</button>';
+    html+='</div>';
+    html+='</div>';
+  });
+  html+='</div>';
+  document.getElementById('contacts-list').innerHTML=html;
+
+  // Focus first missing input
+  var firstMissing = leads.find(function(l){return !l.contact;});
+  if(firstMissing){
+    setTimeout(function(){
+      var el=document.getElementById('ci-'+firstMissing.id);
+      if(el) el.focus();
+    },100);
+  }
+}
+
+function saveContact(id){
+  var el=document.getElementById('ci-'+id); if(!el) return;
+  var val=el.value.trim();
+  var l=leads.find(function(x){return x.id===id;}); if(!l) return;
+  l.contact=val;
+  saveLeads();
+  // Update border color
+  el.style.borderColor=val?'var(--b2)':'var(--yw-b)';
+  showToast('Saved for '+l.name);
+  // Update badge
+  var missing=leads.filter(function(x){return !x.contact;}).length;
+  var badge=document.getElementById('contacts-badge');
+  if(badge){badge.textContent=missing;badge.style.display=missing>0?'inline':'none';}
+}
+
+function saveAllContacts(){
+  var saved=0;
+  leads.forEach(function(l){
+    var el=document.getElementById('ci-'+l.id);
+    if(el){
+      var val=el.value.trim();
+      if(val!==l.contact){ l.contact=val; saved++; }
+    }
+  });
+  saveLeads();
+  var el=document.getElementById('contacts-saved');
+  if(el){el.style.display='inline';setTimeout(function(){el.style.display='none';},2000);}
+  showToast(saved+' contacts updated');
+  renderContacts();
 }
 
 function loadUI(){
@@ -659,7 +755,7 @@ function renderQueue(){
       +'<div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">'
       +'<span>'+fmtN(l.subs)+' subs</span>'
       +(l.videoTitle?'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px">'+esc(l.videoTitle)+'</span>':'')
-      +(l.contact?'<span style="color:var(--blue)">'+esc(l.contact)+'</span>':'<span style="color:var(--rd)">no email</span>')
+      +(l.contact?'<span style="color:var(--blue)">'+esc(l.contact)+'</span>':'<span style="color:var(--yw);cursor:pointer;text-decoration:underline" onclick="openView(\'contacts\')">+ add email</span>')
       +'</div></div>'
       +'<div style="display:flex;gap:8px;align-items:center;flex-shrink:0">'
       +(ready
