@@ -786,6 +786,8 @@ function markAsSent() {
   closeModal('modal-review'); renderQueue(); renderStats();
   showToast('Marked as sent — follow-up scheduled in 3 days');
 }
+
+async function rewriteEmail(){
   if(!currentReview)return;
   var l=leads.find(function(x){return x.id===currentReview;});if(!l)return;
   var note=document.getElementById('corr-inp').value.trim();
@@ -802,7 +804,7 @@ function markAsSent() {
     document.getElementById('rv-subject').textContent='Subject: '+l.subject;
     document.getElementById('rv-body').textContent=l.emailBody;
     document.getElementById('corr-inp').value='';showToast('Email rewritten');
-  }catch(e){showToast('Rewrite failed','err');}
+  }catch(e){showToast('Rewrite failed: '+e.message,'err');}
   btn.disabled=false;btn.textContent='Rewrite';
 }
 
