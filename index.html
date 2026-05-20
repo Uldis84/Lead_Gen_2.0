@@ -228,6 +228,19 @@ textarea{resize:vertical;line-height:1.6}
           <div id="rv-subject" style="font-size:11px;color:var(--muted);margin-bottom:8px;font-family:var(--mono)"></div>
           <div class="email-preview" id="rv-body"></div>
         </div>
+        <!-- Instagram DM section — shown only when insta handle exists -->
+        <div id="rv-insta-section" style="display:none;background:var(--bg);border:1px solid #2a1f3a;border-radius:9px;padding:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span style="font-size:14px">📸</span>
+            <div style="font-size:12px;font-weight:600;color:#c084fc">Instagram DM</div>
+            <div id="rv-insta-handle" style="font-size:11px;color:var(--muted);margin-left:auto"></div>
+          </div>
+          <div id="rv-insta-dm" style="font-size:12px;line-height:1.6;color:#d8c8f0;background:#120a1f;border:1px solid #2a1f3a;border-radius:7px;padding:10px;white-space:pre-wrap;min-height:80px"></div>
+          <div style="display:flex;gap:7px;margin-top:10px">
+            <button class="btn btn-sm" style="background:#2a1f3a;color:#c084fc;border:1px solid #3d2a5a" onclick="copyDM()">Copy DM</button>
+            <a id="rv-insta-link" href="#" target="_blank" class="btn btn-sm" style="background:none;color:var(--muted);border:1px solid var(--b2);text-decoration:none">Open Instagram ↗</a>
+          </div>
+        </div>
         <div style="background:var(--bg);border:1px solid var(--b2);border-radius:9px;padding:14px">
           <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Request a correction:</div>
           <div style="display:flex;gap:8px">
@@ -242,7 +255,10 @@ textarea{resize:vertical;line-height:1.6}
         <button class="btn btn-rd btn-sm" onclick="skipLead()">Skip Lead</button>
         <button class="btn btn-g btn-sm" onclick="closeModal('modal-review')">Later</button>
       </div>
-      <button class="btn btn-gr btn-lg" id="btn-send" onclick="sendEmail()">Send Email</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-gr btn-lg" id="btn-send" onclick="sendEmail()" style="display:none">Send Email</button>
+        <button class="btn btn-lg" id="btn-mark-sent" onclick="markAsSent()" style="display:none;background:#2a1f3a;color:#c084fc;border:1px solid #3d2a5a">DM Copied — Mark Sent</button>
+      </div>
     </div>
   </div>
 </div>
@@ -660,11 +676,40 @@ function openReview(id){
   if(!l||!l.emailBody){showToast('No email generated yet');return;}
   currentReview=id;
   document.getElementById('rv-name').textContent=l.name;
-  document.getElementById('rv-meta').textContent=fmtN(l.subs)+' subs &middot; '+(l.contact||'no email found');
+  document.getElementById('rv-meta').textContent=fmtN(l.subs)+' subs \u00b7 '+(l.contact||'no contact found');
   document.getElementById('rv-subject').textContent='Subject: '+l.subject;
   document.getElementById('rv-body').textContent=l.emailBody;
   document.getElementById('rv-link').href=l.videoId?'https://youtube.com/watch?v='+l.videoId:l.link;
   document.getElementById('corr-inp').value='';
+
+  // Detect contact type
+  var contact = l.contact||'';
+  var isInsta = contact.startsWith('@') || (!contact.includes('@') && contact.length>0);
+  var hasEmail = contact.includes('@') && !contact.startsWith('@');
+
+  // Show/hide correct send button
+  document.getElementById('btn-send').style.display = hasEmail ? 'inline-flex' : 'none';
+  document.getElementById('btn-mark-sent').style.display = isInsta ? 'inline-flex' : 'none';
+
+  // Instagram DM section
+  var instaSection = document.getElementById('rv-insta-section');
+  if(isInsta && contact) {
+    var handle = contact.startsWith('@') ? contact : '@'+contact;
+    var dm = generateDMText(l);
+    l.instaDM = dm; // save on lead for copy
+    saveLeads();
+    document.getElementById('rv-insta-handle').textContent = handle;
+    document.getElementById('rv-insta-dm').textContent = dm;
+    var cleanHandle = handle.replace('@','');
+    document.getElementById('rv-insta-link').href = 'https://instagram.com/'+cleanHandle;
+    instaSection.style.display = 'block';
+  } else if(hasEmail) {
+    // Also generate DM if we have both — show as bonus
+    instaSection.style.display = 'none';
+  } else {
+    instaSection.style.display = 'none';
+  }
+
   var aHtml='';
   if(l.fitNote){
     var isWarning=l.fitNote.toLowerCase().indexOf('similar to skipped')>=0||l.fitNote.toLowerCase().indexOf('resembles')>=0;
@@ -688,7 +733,59 @@ function openReview(id){
   document.getElementById('modal-review').style.display='flex';
 }
 
-async function rewriteEmail(){
+function generateDMText(lead) {
+  var firstName = (lead.name||'').split(' ')[0];
+  var mainIssue = lead.mainIssue || '';
+  var observation = lead.observation || '';
+
+  // Build a short, punchy DM based on the analysis
+  var dm = 'Hey ' + firstName + ',\n\n';
+
+  if(observation) {
+    dm += 'Just watched your video — ' + observation.charAt(0).toLowerCase() + observation.slice(1) + '\n\n';
+  } else {
+    dm += 'Just came across your channel and really liked the style.\n\n';
+  }
+
+  if(mainIssue) {
+    dm += 'One thing I think could make it even stronger: ' + mainIssue.charAt(0).toLowerCase() + mainIssue.slice(1) + '\n\n';
+  }
+
+  dm += 'I edit long-form YouTube videos with a focus on retention and narrative — worked with Harry Kersh on his food/travel channel.\n\n';
+  dm += 'Portfolio: uldiskipens.com\n\n';
+  dm += 'Worth a quick chat?';
+
+  return dm;
+}
+
+function copyDM() {
+  var l = leads.find(function(x){return x.id===currentReview;});
+  if(!l) return;
+  var dm = l.instaDM || document.getElementById('rv-insta-dm').textContent;
+  navigator.clipboard.writeText(dm).then(function(){
+    showToast('DM copied — paste it in Instagram');
+    // Visual feedback on button
+    var btn = document.querySelector('[onclick="copyDM()"]');
+    if(btn){ btn.textContent='Copied!'; setTimeout(function(){btn.textContent='Copy DM';},2000); }
+  }).catch(function(){
+    // Fallback: select text
+    var el = document.getElementById('rv-insta-dm');
+    var range = document.createRange(); range.selectNode(el);
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+    showToast('Text selected — press Ctrl+C to copy');
+  });
+}
+
+function markAsSent() {
+  var l = leads.find(function(x){return x.id===currentReview;});
+  if(!l) return;
+  l.status='Sent'; l.sentDate=new Date().toISOString().slice(0,10);
+  var fu=new Date(); fu.setDate(fu.getDate()+3); l.followUpDate=fu.toISOString().slice(0,10);
+  recordApprove(l);
+  saveLeads(); daily.count++; saveDaily(); updateBar();
+  closeModal('modal-review'); renderQueue(); renderStats();
+  showToast('Marked as sent — follow-up scheduled in 3 days');
+}
   if(!currentReview)return;
   var l=leads.find(function(x){return x.id===currentReview;});if(!l)return;
   var note=document.getElementById('corr-inp').value.trim();
