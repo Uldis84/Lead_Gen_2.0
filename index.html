@@ -202,6 +202,12 @@ textarea{resize:vertical;line-height:1.6}
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:500;margin-bottom:6px">Permanent AI Instructions</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Tell the AI things it should always remember when writing emails. These persist forever and override defaults.<br>Examples: "Focus on investigation/true crime, avoid pure video essays" · "Never target under 20k subs" · "Reference ohnepixel for gaming channels"</div>
+      <textarea id="inp-instructions" rows="4" placeholder="e.g. Focus on documentary and investigation channels. Avoid pure video essays like Hbomberguy. Reference ohnepixel for gaming creators. Always mention that editing is about keeping viewers until the very end, not just the first 30 seconds." style="font-size:12px;line-height:1.6"></textarea>
+      <button class="btn btn-p btn-sm" style="margin-top:8px" onclick="saveInstructions()">Save Instructions</button>
+    </div>
+    <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:6px">Gmail Integration</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Deploy your Apps Script as a Web App and paste the URL here for direct sending.</div>
       <div style="margin-bottom:10px"><input type="text" id="inp-script" placeholder="https://script.google.com/macros/s/.../exec"></div>
@@ -300,8 +306,12 @@ var leads=JSON.parse(localStorage.getItem('uh-l')||'[]');
 var blocked=JSON.parse(localStorage.getItem('uh-b')||'[]');
 var daily=JSON.parse(localStorage.getItem('uh-d')||'{"date":"","count":0}');
 // Learning memory: stores approved/skipped channel patterns so AI can improve
-var feedback=JSON.parse(localStorage.getItem('uh-fb')||'{"approved":[],"skipped":[]}');
+var feedback=JSON.parse(localStorage.getItem('uh-fb')||'{"approved":[],"skipped":[],"instructions":""}');
 function saveFeedback(){localStorage.setItem('uh-fb',JSON.stringify(feedback));}
+// Permanent AI instructions — things you tell the AI once and it remembers forever
+// e.g. "Always reference Harry Kersh for documentary, ohnepixel for gaming"
+// e.g. "Never target channels under 20k subs"
+// e.g. "Focus on investigation and true crime, avoid pure video essays"
 var LIMIT=parseInt(settings.dailyLimit||35);
 var WK_PAUSE=settings.weekendPause!==false;
 var activeChips=new Set();
@@ -310,18 +320,18 @@ var importSel=new Set();
 var currentReview=null;
 
 var NICHES=[
-  {label:'Mini Documentary',query:'mini documentary story'},
-  {label:'Investigative',query:'investigative youtube documentary'},
-  {label:'True Crime',query:'true crime documentary explained'},
-  {label:'Video Essay',query:'video essay analysis deep dive'},
-  {label:'Travel Story',query:'travel documentary narrative vlog'},
-  {label:'Dark History',query:'dark history explained youtube'},
-  {label:'Expose / Drama',query:'exposing drama youtube story'},
-  {label:'Creator Journey',query:'content creator story documentary'},
-  {label:'Food Narrative',query:'food story best restaurant tour'},
-  {label:'City Documentary',query:'city documentary guide story'},
-  {label:'Finance Story',query:'money story how I made explained'},
-  {label:'Psychology',query:'psychology analysis explained youtube'},
+  {label:'🕵️ Investigation',   query:'exposing investigation youtube story'},
+  {label:'🎬 Mini Documentary', query:'mini documentary short film youtube'},
+  {label:'⚖️ True Crime',       query:'true crime case documentary youtube'},
+  {label:'📜 Dark History',     query:'dark history explained untold story'},
+  {label:'🌍 Travel Doc',       query:'travel documentary narrative journey'},
+  {label:'🎙️ Video Essay',      query:'video essay deep dive analysis'},
+  {label:'😤 Drama / Expose',   query:'exposing drama scandal story youtube'},
+  {label:'🏙️ City / Place',     query:'city documentary hidden stories explore'},
+  {label:'💀 Cold Case',        query:'cold case mystery unsolved documentary'},
+  {label:'🧠 Psychology',       query:'psychology behaviour analysis explained'},
+  {label:'💰 Finance / Scam',   query:'scam exposed money story investigation'},
+  {label:'🎭 Creator Story',    query:'creator rise fall story documentary'},
 ];
 
 var CRITERIA=[
@@ -479,6 +489,7 @@ function loadUI(){
   document.getElementById('inp-ai').value=settings.anthropicKey||'';
   document.getElementById('inp-lim').value=settings.dailyLimit||35;
   document.getElementById('inp-script').value=settings.scriptUrl||'';
+  document.getElementById('inp-instructions').value=feedback.instructions||'';
   document.getElementById('bc').textContent=blocked.length;
   var tw=document.getElementById('toggle-wk');
   WK_PAUSE?tw.classList.add('on'):tw.classList.remove('on');
@@ -499,6 +510,12 @@ function saveLimit(){
 function saveScript(){
   settings.scriptUrl=document.getElementById('inp-script').value.trim();
   saveSettings();updateGmail();showToast('Script URL saved');
+}
+
+function saveInstructions(){
+  feedback.instructions=document.getElementById('inp-instructions').value.trim();
+  saveFeedback();
+  showToast('AI instructions saved — applies to all future emails');
 }
 
 function toggleWk(btn){
@@ -570,7 +587,7 @@ async function doSearch(){
     var allCh=[];
     for(var s=0;s<fresh.length;s+=50){
       var batch=fresh.slice(s,s+50).join(',');
-      var cr=await fetch('https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&id='+batch+'&key='+settings.ytKey);
+      var cr=await fetch('https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet,brandingSettings&id='+batch+'&key='+settings.ytKey);
       var cd=await cr.json();if(cd.error)throw new Error(cd.error.message);
       allCh=allCh.concat(cd.items||[]);
     }
@@ -579,7 +596,17 @@ async function doSearch(){
       var views=parseInt(ch.statistics&&ch.statistics.viewCount||0);
       var vids=Math.max(1,parseInt(ch.statistics&&ch.statistics.videoCount||1));
       var desc=ch.snippet&&ch.snippet.description||'';
-      var em=(desc.match(/[\w.+-]+@[\w.-]+\.\w{2,}/)||[''])[0];
+      // Multi-method email extraction
+      var em='';
+      // Method 1: direct regex on description
+      var emMatch=desc.match(/[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/);
+      if(emMatch) em=emMatch[0];
+      // Method 2: look for "email" keyword nearby
+      if(!em){var emailLine=desc.split('\n').find(function(l){return l.toLowerCase().includes('email') || l.toLowerCase().includes('contact') || l.toLowerCase().includes('business');});if(emailLine){var em2=emailLine.match(/[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/);if(em2)em=em2[0];}}
+      // Method 3: look in brandingSettings if available
+      if(!em&&ch.brandingSettings&&ch.brandingSettings.channel){var bs=ch.brandingSettings.channel;var bsText=(bs.description||'')+(bs.unsubscribedTrailer||'');var em3=bsText.match(/[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/);if(em3)em=em3[0];}
+      // Filter out YouTube/Google internal
+      if(em&&(em.includes('youtube.')||em.includes('google.')||em.includes('@goo')))em='';
       var handle=ch.snippet&&ch.snippet.customUrl||'';
       var vi=cidMap[ch.id]||{};
       return{channelId:ch.id,name:ch.snippet&&ch.snippet.title||'',handle:handle,desc:desc,
@@ -701,8 +728,10 @@ async function generateEmail(lead){
 
   var prompt='You are analyzing a YouTube channel to write a cold outreach email for Uldis Kipens, a narrative long-form video editor.\n\n'
     +'Channel: '+lead.name+'\nSubscribers: '+fmtN(lead.subs)+'\nRecent video: '+lead.videoTitle+'\nDescription: '+(lead.desc||'').slice(0,400)+'\n'
+    +(feedback.instructions?'\nPERMANENT INSTRUCTIONS FROM ULDIS (always follow these):\n'+feedback.instructions+'\n':'')
     +learningCtx+'\n'
-    +'Uldis specializes in narrative storytelling, pacing, and retention for long-form YouTube videos. His portfolio: uldiskipens.com. His main reference: Harry Kersh (food/travel creator).\n\n'
+    +'Uldis specializes in narrative storytelling, pacing, and retention for long-form YouTube videos. His portfolio: uldiskipens.com.\n'
+    +'Social proof: Harry Kersh (food/travel, 150k+ views per video) for documentary/narrative channels. ohnepixel (4.5M subs) for gaming/entertainment channels.\n\n'
     +'Evaluate this channel based on these criteria and identify the 2-3 biggest weaknesses:\n'
     +'1. dead_space: long silences, boring one-takes with no energy\n'
     +'2. intro_music: weak/missing background music, bad opening hook to pull audience in\n'
