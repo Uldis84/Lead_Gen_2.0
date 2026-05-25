@@ -374,6 +374,14 @@ function init(){
   var missing=leads.filter(function(l){return !l.contact&&!l.insta;}).length;
   var badge=document.getElementById('contacts-badge');
   if(badge){badge.textContent=missing;badge.style.display=missing>0?'inline':'none';}
+  // One-time cleanup: mark old leads without sentDate as fu1Sent so they don't trigger
+  var cleaned=false;
+  leads.forEach(function(l){
+    if((l.status==='Sent'||l.status==='FU1 Sent'||l.status==='FU2 Sent')&&!l.sentDate&&!l.fu1Sent){
+      l.fu1Sent=true; l.fu2Sent=true; cleaned=true;
+    }
+  });
+  if(cleaned) saveLeads();
   // Auto-run follow-ups on load
   setTimeout(runFollowUps, 2000);
 }
@@ -1103,13 +1111,24 @@ function renderStats(){
 // ── AUTO FOLLOW-UP ENGINE ────────────────────────────────────
 // Runs on load — checks for due follow-ups and generates/sends them
 async function runFollowUps(){
-  if(!settings.scriptUrl&&!settings.gmailToken){return;} // need a send method
+  if(!settings.scriptUrl&&!settings.gmailToken){return;}
   var today=new Date().toISOString().slice(0,10);
+
+  // Only process leads that:
+  // 1. Were sent FROM this system (have followUpDate set)
+  // 2. Haven't had FU already sent
   var due=leads.filter(function(l){
-    return l.status==='Sent'&&l.followUpDate&&l.followUpDate<=today&&!l.fu1Sent;
+    return l.status==='Sent'
+      && l.followUpDate
+      && l.followUpDate<=today
+      && !l.fu1Sent
+      && l.sentDate; // must have been sent via this system
   });
   var due2=leads.filter(function(l){
-    return l.status==='FU1 Sent'&&l.fu2Date&&l.fu2Date<=today&&!l.fu2Sent;
+    return l.status==='FU1 Sent'
+      && l.fu2Date
+      && l.fu2Date<=today
+      && !l.fu2Sent;
   });
 
   if(!due.length&&!due2.length) return;
