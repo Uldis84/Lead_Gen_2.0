@@ -120,7 +120,7 @@ textarea{resize:vertical;line-height:1.6}
   <div class="nav-group">
     <div class="nav-label">Tracking</div>
     <button class="nav-item" id="nav-pipeline" onclick="openView('pipeline')"><span class="nav-icon">P</span>Pipeline</button>
-    <button class="nav-item" id="nav-sent" onclick="openView('sent')"><span class="nav-icon">E</span>Sent</button>
+    <button class="nav-item" id="nav-sent" onclick="openView('sent')"><span class="nav-icon">E</span>Sent<span class="nav-badge" id="fu-badge" style="display:none;background:var(--yw);color:#000">0</span></button>
   </div>
   <div class="nav-group">
     <div class="nav-label">Config</div>
@@ -245,7 +245,7 @@ textarea{resize:vertical;line-height:1.6}
           <div id="rv-subject" style="font-size:11px;color:var(--muted);margin-bottom:8px;font-family:var(--mono)"></div>
           <div class="email-preview" id="rv-body"></div>
         </div>
-        <!-- Instagram DM section — shown only when insta handle exists -->
+        <!-- Instagram DM section — shown when insta handle found -->
         <div id="rv-insta-section" style="display:none;background:var(--bg);border:1px solid #2a1f3a;border-radius:9px;padding:14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <span style="font-size:14px">📸</span>
@@ -254,9 +254,18 @@ textarea{resize:vertical;line-height:1.6}
           </div>
           <div id="rv-insta-dm" style="font-size:12px;line-height:1.6;color:#d8c8f0;background:#120a1f;border:1px solid #2a1f3a;border-radius:7px;padding:10px;white-space:pre-wrap;min-height:80px"></div>
           <div style="display:flex;gap:7px;margin-top:10px">
-            <button class="btn btn-sm" style="background:#2a1f3a;color:#c084fc;border:1px solid #3d2a5a" onclick="copyDM()">Copy DM</button>
-            <a id="rv-insta-link" href="#" target="_blank" class="btn btn-sm" style="background:none;color:var(--muted);border:1px solid var(--b2);text-decoration:none">Open Instagram ↗</a>
+            <button class="btn btn-sm" style="background:#2a1f3a;color:#c084fc;border:1px solid #3d2a5a;font-size:12px" onclick="copyDM()">📋 Copy DM</button>
+            <a id="rv-insta-link" href="#" target="_blank" class="btn btn-sm btn-g" style="font-size:12px;text-decoration:none">Open Instagram ↗</a>
           </div>
+        </div>
+        <!-- No contact fallback -->
+        <div id="rv-no-contact" style="display:none;background:var(--yw-bg);border:1px solid var(--yw-b);border-radius:9px;padding:12px">
+          <div style="font-size:12px;color:var(--yw);font-weight:600;margin-bottom:8px">⚠️ No contact found — find manually:</div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <a id="rv-google-link" href="#" target="_blank" class="btn btn-sm btn-g" style="font-size:12px;text-decoration:none">🔍 Google</a>
+            <a id="rv-about-link" href="#" target="_blank" class="btn btn-sm btn-g" style="font-size:12px;text-decoration:none">YT About ↗</a>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:7px">Found it? Add in the "@ Add Emails" tab</div>
         </div>
         <div style="background:var(--bg);border:1px solid var(--b2);border-radius:9px;padding:14px">
           <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Request a correction:</div>
@@ -298,6 +307,7 @@ textarea{resize:vertical;line-height:1.6}
   </div>
 </div>
 
+<div id="fu-banner" style="display:none;position:fixed;bottom:60px;right:20px;background:var(--yw-bg);border:1px solid var(--yw-b);border-radius:10px;padding:10px 16px;font-size:13px;color:var(--yw);z-index:998;align-items:center;gap:8px"><span class="spin" style="border-top-color:var(--yw)"></span>Sending follow-ups...</div>
 <div id="toast" class="toast"></div>
 
 <script>
@@ -361,9 +371,11 @@ function init(){
   renderQueue();
   renderStats();
   // Show badge for missing contacts
-  var missing=leads.filter(function(l){return !l.contact;}).length;
+  var missing=leads.filter(function(l){return !l.contact&&!l.insta;}).length;
   var badge=document.getElementById('contacts-badge');
   if(badge){badge.textContent=missing;badge.style.display=missing>0?'inline':'none';}
+  // Auto-run follow-ups on load
+  setTimeout(runFollowUps, 2000);
 }
 
 function checkReset(){
@@ -607,12 +619,21 @@ async function doSearch(){
       if(!em&&ch.brandingSettings&&ch.brandingSettings.channel){var bs=ch.brandingSettings.channel;var bsText=(bs.description||'')+(bs.unsubscribedTrailer||'');var em3=bsText.match(/[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/);if(em3)em=em3[0];}
       // Filter out YouTube/Google internal
       if(em&&(em.includes('youtube.')||em.includes('google.')||em.includes('@goo')))em='';
+      // Extract Instagram handle from description
+      var insta='';
+      var instaMatch=desc.match(/(?:instagram\.com\/|ig:|insta:|instagram:|@)([a-zA-Z0-9_.]{2,30})/i);
+      if(instaMatch){
+        var candidate=instaMatch[1].replace(/[^a-zA-Z0-9_.]/g,'');
+        if(candidate&&candidate.length>1&&!candidate.toLowerCase().includes('youtube')&&!candidate.toLowerCase().includes('google')) insta='@'+candidate;
+      }
+      // Also check for @handle pattern in description lines
+      if(!insta){var instaLine=desc.split('\n').find(function(ln){return ln.toLowerCase().includes('instagram')||ln.toLowerCase().includes('/ig/');});if(instaLine){var im2=instaLine.match(/@([a-zA-Z0-9_.]{2,30})/);if(im2)insta='@'+im2[1];}}
       var handle=ch.snippet&&ch.snippet.customUrl||'';
       var vi=cidMap[ch.id]||{};
       return{channelId:ch.id,name:ch.snippet&&ch.snippet.title||'',handle:handle,desc:desc,
         link:'https://youtube.com/'+(handle||'channel/'+ch.id),
         thumb:ch.snippet&&ch.snippet.thumbnails&&ch.snippet.thumbnails.default&&ch.snippet.thumbnails.default.url||'',
-        subs:subs,avgV:Math.round(views/vids),contact:em,videoTitle:vi.title||'',videoId:vi.videoId||''};
+        subs:subs,avgV:Math.round(views/vids),contact:em,insta:insta,videoTitle:vi.title||'',videoId:vi.videoId||''};
     });
     importSel=new Set(searchResults.map(function(_,i){return i;}));
     renderSearch();
@@ -639,7 +660,9 @@ function renderSearch(){
       +'<div style="min-width:0;flex:1">'
       +'<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ch.name)+'</div>'
       +'<div style="font-size:11px;color:var(--muted)">'+fmtN(ch.subs)+' subs</div>'
-      +(ch.contact?'<div style="font-size:11px;color:var(--blue)">'+esc(ch.contact)+'</div>':'')
+      +(ch.contact?'<div style="font-size:11px;color:var(--blue)">📧 '+esc(ch.contact)+'</div>':'')
+      +(ch.insta?'<div style="font-size:11px;color:#c084fc">📸 '+esc(ch.insta)+'</div>':'')
+      +(!ch.contact&&!ch.insta?'<div style="display:flex;gap:5px;margin-top:3px"><a href="https://www.google.com/search?q='+encodeURIComponent(ch.name+' youtube contact email')+'" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:var(--muted);border:1px solid var(--b2);border-radius:4px;padding:2px 6px;text-decoration:none">🔍 Google</a><a href="'+esc(ch.link)+'/about" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:var(--muted);border:1px solid var(--b2);border-radius:4px;padding:2px 6px;text-decoration:none">YT About</a></div>':'')
       +'</div></div>'
       +(ch.videoTitle?'<div style="font-size:11px;color:var(--muted);margin-top:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">via: '+esc(ch.videoTitle)+'</div>':'')
       +'</div>';
@@ -678,9 +701,9 @@ function confirmImport(){
   items.forEach(function(ch){
     leads.push({id:uid(),date:new Date().toISOString().slice(0,10),
       channelId:ch.channelId,name:ch.name,link:ch.link,thumb:ch.thumb,
-      subs:ch.subs,avgV:ch.avgV,contact:ch.contact,desc:ch.desc||'',
+      subs:ch.subs,avgV:ch.avgV,contact:ch.contact,insta:ch.insta||'',desc:ch.desc||'',
       videoTitle:ch.videoTitle,videoId:ch.videoId,
-      status:'New',subject:'',emailBody:'',analysis:null,mainIssue:'',
+      status:'New',subject:'',emailBody:'',instaDM:'',analysis:null,mainIssue:'',observation:'',fitNote:'',
       sentDate:'',followUpDate:'',notes:''});
   });
   saveLeads();closeModal('modal-import');renderQueue();renderStats();
@@ -801,7 +824,11 @@ function openReview(id){
   if(!l||!l.emailBody){showToast('No email generated yet');return;}
   currentReview=id;
   document.getElementById('rv-name').textContent=l.name;
-  document.getElementById('rv-meta').textContent=fmtN(l.subs)+' subs \u00b7 '+(l.contact||'no contact found');
+  var contactDisplay = [];
+  if(hasEmail) contactDisplay.push('📧 '+contact);
+  if(hasInsta) contactDisplay.push('📸 '+instaHandle);
+  if(!hasEmail&&!hasInsta) contactDisplay.push('⚠️ no contact found');
+  document.getElementById('rv-meta').textContent = fmtN(l.subs)+' subs · '+contactDisplay.join(' · ');
   document.getElementById('rv-subject').textContent='Subject: '+l.subject;
   document.getElementById('rv-body').textContent=l.emailBody;
   document.getElementById('rv-link').href=l.videoId?'https://youtube.com/watch?v='+l.videoId:l.link;
@@ -809,30 +836,37 @@ function openReview(id){
 
   // Detect contact type
   var contact = l.contact||'';
-  var isInsta = contact.startsWith('@') || (!contact.includes('@') && contact.length>0);
+  var instaHandle = l.insta||'';
   var hasEmail = contact.includes('@') && !contact.startsWith('@');
+  var hasInsta = instaHandle.length > 0;
 
-  // Show/hide correct send button
+  // Show/hide send buttons
   document.getElementById('btn-send').style.display = hasEmail ? 'inline-flex' : 'none';
-  document.getElementById('btn-mark-sent').style.display = isInsta ? 'inline-flex' : 'none';
+  document.getElementById('btn-mark-sent').style.display = (!hasEmail && hasInsta) ? 'inline-flex' : 'none';
 
-  // Instagram DM section
+  // Instagram DM section — show whenever we have an insta handle
   var instaSection = document.getElementById('rv-insta-section');
-  if(isInsta && contact) {
-    var handle = contact.startsWith('@') ? contact : '@'+contact;
+  var noContact = document.getElementById('rv-no-contact');
+  if(noContact) noContact.style.display='none';
+
+  if(hasInsta) {
     var dm = generateDMText(l);
-    l.instaDM = dm; // save on lead for copy
+    l.instaDM = dm;
     saveLeads();
-    document.getElementById('rv-insta-handle').textContent = handle;
+    document.getElementById('rv-insta-handle').textContent = instaHandle;
     document.getElementById('rv-insta-dm').textContent = dm;
-    var cleanHandle = handle.replace('@','');
-    document.getElementById('rv-insta-link').href = 'https://instagram.com/'+cleanHandle;
+    document.getElementById('rv-insta-link').href = 'https://instagram.com/'+instaHandle.replace('@','');
     instaSection.style.display = 'block';
-  } else if(hasEmail) {
-    // Also generate DM if we have both — show as bonus
-    instaSection.style.display = 'none';
   } else {
     instaSection.style.display = 'none';
+    if(!hasEmail && noContact) {
+      // Show Google fallback
+      var gLink = document.getElementById('rv-google-link');
+      var aLink = document.getElementById('rv-about-link');
+      if(gLink) gLink.href='https://www.google.com/search?q='+encodeURIComponent(l.name+' youtube contact email');
+      if(aLink) aLink.href=l.link+'/about';
+      noContact.style.display='block';
+    }
   }
 
   var aHtml='';
@@ -1057,8 +1091,108 @@ function renderStats(){
   document.getElementById('s-ready').textContent=leads.filter(function(l){return l.status==='Ready';}).length;
   document.getElementById('s-today').textContent=daily.count;
   document.getElementById('s-replies').textContent=leads.filter(function(l){return l.status==='Replied'||l.status==='Call Booked';}).length;
-  document.getElementById('s-fu').textContent=leads.filter(function(l){return l.status==='Sent'&&l.followUpDate&&l.followUpDate<=today;}).length;
+  var fuCount=leads.filter(function(l){
+    return (l.status==='Sent'&&l.followUpDate&&l.followUpDate<=today&&!l.fu1Sent)||
+           (l.status==='FU1 Sent'&&l.fu2Date&&l.fu2Date<=today&&!l.fu2Sent);
+  }).length;
+  document.getElementById('s-fu').textContent=fuCount;
+  var fuBadge=document.getElementById('fu-badge');
+  if(fuBadge){fuBadge.textContent=fuCount;fuBadge.style.display=fuCount>0?'inline':'none';}
 }
+
+// ── AUTO FOLLOW-UP ENGINE ────────────────────────────────────
+// Runs on load — checks for due follow-ups and generates/sends them
+async function runFollowUps(){
+  if(!settings.scriptUrl&&!settings.gmailToken){return;} // need a send method
+  var today=new Date().toISOString().slice(0,10);
+  var due=leads.filter(function(l){
+    return l.status==='Sent'&&l.followUpDate&&l.followUpDate<=today&&!l.fu1Sent;
+  });
+  var due2=leads.filter(function(l){
+    return l.status==='FU1 Sent'&&l.fu2Date&&l.fu2Date<=today&&!l.fu2Sent;
+  });
+
+  if(!due.length&&!due2.length) return;
+
+  var banner=document.getElementById('fu-banner');
+  if(banner) banner.style.display='flex';
+
+  for(var i=0;i<due.length;i++){
+    var l=due[i];
+    await sendFollowUp(l, 1);
+    await sleep(600);
+  }
+  for(var j=0;j<due2.length;j++){
+    var l2=due2[j];
+    await sendFollowUp(l2, 2);
+    await sleep(600);
+  }
+
+  saveLeads(); renderStats(); renderSent();
+  if(banner) banner.style.display='none';
+  if(due.length+due2.length>0) showToast((due.length+due2.length)+' follow-up(s) sent automatically');
+}
+
+async function sendFollowUp(l, num){
+  var firstName=(l.name||'').split(' ')[0];
+  var isGerman = (l.lang||'en')==='de';
+
+  var subject, body;
+  if(num===1){
+    subject = isGerman
+      ? 'Re: '+l.subject
+      : 'Re: '+l.subject;
+    body = isGerman
+      ? 'Hey '+firstName+',\n\nnur kurze Nachfrage – ist meine letzte Mail im Postfach-Chaos untergegangen?\n\nKein Stress, falls du gerade viel um die Ohren hast. Ich denke nur, dass ich dir wirklich helfen könnte, mehr Zuschauer bis zum Ende zu halten.\n\nPortfolio: uldiskipens.com\n\nBeste Grüße,\nUldis'
+      : 'Hey '+firstName+',\n\njust checking in — did my last email get lost in the inbox chaos?\n\nNo worries if you\'re slammed. I genuinely think I could help boost your retention in a noticeable way.\n\nPortfolio: uldiskipens.com\n\nCheers,\nUldis';
+    l.fu1Sent=true;
+    l.status='FU1 Sent';
+    // Schedule FU2 in 4 days
+    var d=new Date(); d.setDate(d.getDate()+4);
+    l.fu2Date=d.toISOString().slice(0,10);
+  } else {
+    subject = isGerman
+      ? 'Letzte Nachricht: '+l.name
+      : 'Last one, promise — '+firstName;
+    body = isGerman
+      ? 'Hey '+firstName+',\n\nletzte Nachricht von mir, versprochen!\n\nFalls du irgendwann einen Editor für Long-Form Content brauchst – ich bin da.\n\nPortfolio: uldiskipens.com\n\nViel Erfolg mit dem Kanal!\n\nBeste Grüße,\nUldis'
+      : 'Hey '+firstName+',\n\nlast one from me, I promise!\n\nIf you ever need a long-form editor, you know where to find me.\n\nPortfolio: uldiskipens.com\n\nGood luck with the channel!\n\nCheers,\nUldis';
+    l.fu2Sent=true;
+    l.status='FU2 Sent';
+    l.fu2Date='';
+  }
+
+  // Try AI polish if key available
+  if(settings.anthropicKey&&settings.anthropicKey.startsWith('sk-ant')){
+    try{
+      var r=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,
+          system:'Rewrite this follow-up cold email to sound natural and human. Short, max 5 lines, no emojis, plain text. Keep the portfolio link. Reply ONLY as JSON: {"subject":"...","body":"..."}',
+          messages:[{role:'user',content:'Subject: '+subject+'\n\nBody:\n'+body}]})
+      });
+      if(r.ok){
+        var d2=await r.json();
+        var txt=(d2.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
+        var parsed=JSON.parse(txt);
+        if(parsed.subject) subject=parsed.subject;
+        if(parsed.body) body=parsed.body;
+      }
+    }catch(e){}
+  }
+
+  // Send via Apps Script or Gmail API
+  if(l.contact&&l.contact.includes('@')&&!l.contact.startsWith('@')){
+    await doSend(l, subject, body);
+  }
+  // Store FU email on lead for reference
+  l['fu'+num+'Subject']=subject;
+  l['fu'+num+'Body']=body;
+  l['fu'+num+'Date']=today;
+}
+
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
 
 function closeModal(id){document.getElementById(id).style.display='none';}
 var toastT;
