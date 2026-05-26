@@ -1158,27 +1158,15 @@ async function sendFollowUp(l, num){
 
   var subject, body;
   if(num===1){
-    subject = isGerman
-      ? 'Re: '+l.subject
-      : 'Re: '+l.subject;
+    subject = 'Re: '+l.subject;
     body = isGerman
-      ? 'Hey '+firstName+',\n\nnur kurze Nachfrage – ist meine letzte Mail im Postfach-Chaos untergegangen?\n\nKein Stress, falls du gerade viel um die Ohren hast. Ich denke nur, dass ich dir wirklich helfen könnte, mehr Zuschauer bis zum Ende zu halten.\n\nPortfolio: uldiskipens.com\n\nBeste Grüße,\nUldis'
-      : 'Hey '+firstName+',\n\njust checking in — did my last email get lost in the inbox chaos?\n\nNo worries if you\'re slammed. I genuinely think I could help boost your retention in a noticeable way.\n\nPortfolio: uldiskipens.com\n\nCheers,\nUldis';
-    l.fu1Sent=true;
-    l.status='FU1 Sent';
-    // Schedule FU2 in 4 days
-    var d=new Date(); d.setDate(d.getDate()+4);
-    l.fu2Date=d.toISOString().slice(0,10);
+      ? 'Hey '+firstName+', nur kurze Nachfrage, ist meine letzte Mail im Postfach-Chaos untergegangen? Kein Stress, falls du gerade viel um die Ohren hast. Ich denke nur, dass ich dir wirklich helfen könnte, mehr Zuschauer bis zum Ende zu halten. Portfolio: uldiskipens.com. Beste Grüße, Uldis'
+      : 'Hey '+firstName+', just checking in, did my last email get lost in the inbox chaos? No worries if you\'re slammed. I genuinely think I could help boost your retention in a noticeable way. Portfolio: uldiskipens.com. Cheers, Uldis';
   } else {
-    subject = isGerman
-      ? 'Letzte Nachricht: '+l.name
-      : 'Last one, promise — '+firstName;
+    subject = isGerman ? 'Letzte Nachricht: '+firstName : 'Last one, promise: '+firstName;
     body = isGerman
-      ? 'Hey '+firstName+',\n\nletzte Nachricht von mir, versprochen!\n\nFalls du irgendwann einen Editor für Long-Form Content brauchst – ich bin da.\n\nPortfolio: uldiskipens.com\n\nViel Erfolg mit dem Kanal!\n\nBeste Grüße,\nUldis'
-      : 'Hey '+firstName+',\n\nlast one from me, I promise!\n\nIf you ever need a long-form editor, you know where to find me.\n\nPortfolio: uldiskipens.com\n\nGood luck with the channel!\n\nCheers,\nUldis';
-    l.fu2Sent=true;
-    l.status='FU2 Sent';
-    l.fu2Date='';
+      ? 'Hey '+firstName+', letzte Nachricht von mir, versprochen! Falls du irgendwann einen Editor für Long-Form Content brauchst, ich bin da. Portfolio: uldiskipens.com. Viel Erfolg mit dem Kanal! Beste Grüße, Uldis'
+      : 'Hey '+firstName+', last one from me, I promise! If you ever need a long-form editor, you know where to find me. Portfolio: uldiskipens.com. Good luck with the channel! Cheers, Uldis';
   }
 
   // Try AI polish if key available
@@ -1201,14 +1189,47 @@ async function sendFollowUp(l, num){
     }catch(e){}
   }
 
-  // Send via Apps Script or Gmail API
-  if(l.contact&&l.contact.includes('@')&&!l.contact.startsWith('@')){
-    await doSend(l, subject, body);
+  // Mark as sent IMMEDIATELY to prevent re-triggering on next load
+  if(num===1){ l.fu1Sent=true; l.status='FU1 Sent'; var d3=new Date(); d3.setDate(d3.getDate()+4); l.fu2Date=d3.toISOString().slice(0,10); }
+  else { l.fu2Sent=true; l.status='FU2 Sent'; l.fu2Date=''; }
+  saveLeads(); // save immediately so reload won't re-trigger
+
+  // Try AI polish if key available
+  if(settings.anthropicKey&&settings.anthropicKey.startsWith('sk-ant')){
+    try{
+      var r=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,
+          system:'Rewrite this follow-up cold email. Short, max 5 lines, no em dashes, no emojis, plain text, single paragraph. Keep the portfolio link. Reply ONLY as JSON: {"subject":"...","body":"..."}',
+          messages:[{role:'user',content:'Subject: '+subject+'\n\nBody:\n'+body}]})
+      });
+      if(r.ok){
+        var d2=await r.json();
+        var txt=(d2.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
+        var parsed=JSON.parse(txt);
+        if(parsed.subject) subject=parsed.subject;
+        if(parsed.body) body=parsed.body;
+      }
+    }catch(e){}
   }
-  // Store FU email on lead for reference
+
+  // Send via Apps Script or mailto fallback
+  if(l.contact&&l.contact.includes('@')&&!l.contact.startsWith('@')){
+    try{
+      if(settings.scriptUrl&&settings.scriptUrl.startsWith('https://script.google')){
+        await fetch(settings.scriptUrl,{method:'POST',body:JSON.stringify({action:'sendEmail',to:l.contact,subject:subject,body:body,name:l.name})});
+      } else {
+        window.open('mailto:'+encodeURIComponent(l.contact)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body),'_blank');
+      }
+    }catch(e){ console.log('FU send failed:',e); }
+  }
+
+  // Store for reference
   l['fu'+num+'Subject']=subject;
   l['fu'+num+'Body']=body;
-  l['fu'+num+'Date']=today;
+  l['fu'+num+'SentDate']=new Date().toISOString().slice(0,10);
+  saveLeads();
 }
 
 function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
