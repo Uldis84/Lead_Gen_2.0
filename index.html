@@ -151,7 +151,7 @@ textarea{resize:vertical;line-height:1.6}
     <div id="queue-list"></div>
   </div>
   <div class="view" id="view-find">
-    <div class="eyebrow">Discovery</div><div class="section-title">Find Leads</div><div class="section-sub">Narrative storytelling creators on YouTube</div>
+    <div class="eyebrow">Discovery</div><div class="section-title">Find Leads</div><div class="section-sub">Narrative storytelling creators on YouTube — auto-scored by niche, sponsoring signals and sub range</div>
     <div class="card" style="margin-bottom:16px">
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Click a niche to search instantly:</div>
       <div id="chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px"></div>
@@ -159,6 +159,10 @@ textarea{resize:vertical;line-height:1.6}
         <input type="search" id="kw" placeholder='Custom: "investigative story", "true crime explained"...' style="flex:1">
         <select id="smax" style="width:120px"><option value="10">10</option><option value="20" selected>20</option><option value="30">30</option><option value="50">50</option></select>
         <button class="btn btn-p" id="btn-search" onclick="doSearch()">Search</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;align-items:center">
+        <button class="chip on" id="chip-hidelow" onclick="toggleHideLow(this)">Hide Low Fit</button>
+        <span style="font-size:11px;color:var(--muted)">Filters out leads with weak niche/sponsor/sub-range score from the list below (still importable if you turn it off)</span>
       </div>
       <div id="serr" style="display:none;font-size:12px;color:var(--rd);background:var(--rd-bg);border:1px solid var(--rd-b);padding:8px 12px;border-radius:7px;margin-top:10px"></div>
     </div>
@@ -200,6 +204,10 @@ textarea{resize:vertical;line-height:1.6}
         <div><div style="font-size:13px;font-weight:500">Pause on weekends</div><div style="font-size:11px;color:var(--muted)">No emails Saturday and Sunday</div></div>
         <button class="toggle on" id="toggle-wk" onclick="toggleWk(this)"></button>
       </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:500;margin-bottom:6px">Lead Scoring Weights</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">How leads are scored during search. Niche tier: Tier 1 (finance/business/software/B2B) = 2pts, Tier 2 (tech/education/documentary/auto/health) = 1pt, Tier 3 (food/travel/gaming/vlog/comedy) = 0pts. Sponsoring signals found in description = up to +4pts. Sub range 80k–400k = +1pt (also 400k–1M if Tier 1 or sponsored). Score 5+ = Premium Fit, 3-4 = Standard Fit, 0-2 = Low Fit.</div>
     </div>
     <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:6px">Permanent AI Instructions</div>
@@ -328,6 +336,7 @@ var activeChips=new Set();
 var searchResults=[];
 var importSel=new Set();
 var currentReview=null;
+var hideLowFit=true;
 
 var NICHES=[
   {label:'🕵️ Investigation',   query:'exposing investigation youtube story'},
@@ -343,6 +352,53 @@ var NICHES=[
   {label:'💰 Finance / Scam',   query:'scam exposed money story investigation'},
   {label:'🎭 Creator Story',    query:'creator rise fall story documentary'},
 ];
+
+// ── LEAD SCORING: niche tier + sponsoring signals + sub range ──
+// Tier 1 = highest RPM potential (finance/business/software/B2B), Tier 2 = mid (tech/education/doc/auto/health),
+// Tier 3 = lowest (food/travel/gaming/vlog/comedy). Used to prioritize which leads are worth a premium pitch.
+var NICHE_TIER_MAP={
+  '🕵️ Investigation':'tier2','🎬 Mini Documentary':'tier2','⚖️ True Crime':'tier2','📜 Dark History':'tier2',
+  '🌍 Travel Doc':'tier3','🎙️ Video Essay':'tier2','😤 Drama / Expose':'tier3','🏙️ City / Place':'tier3',
+  '💀 Cold Case':'tier2','🧠 Psychology':'tier2','💰 Finance / Scam':'tier1','🎭 Creator Story':'tier2'
+};
+var TIER1_KEYWORDS=['finance','financial','invest','investing','trading','stock market','crypto','business','entrepreneur','startup','saas','software','b2b','insurance','legal advice','marketing agency','venture capital'];
+var TIER2_KEYWORDS=['tech','review','education','documentary','science','auto','car review','motorsport','fitness','health','history','psychology','true crime','engineering'];
+var TIER3_KEYWORDS=['food','cooking','recipe','travel vlog','gaming','gameplay','let\'s play','vlog','lifestyle','comedy','meme','prank','unboxing'];
+var SPONSOR_KEYWORDS=['sponsor','sponsored','werbung','anzeige','in cooperation','in kooperation','partnership','use code','promo code','discount code','rabattcode','affiliate','brought to you by','paid partnership','danke an'];
+
+function detectNicheTier(text,chipLabel){
+  var t=(text||'').toLowerCase();
+  function hits(arr){return arr.reduce(function(n,k){return n+(t.indexOf(k)>=0?1:0);},0);}
+  var h1=hits(TIER1_KEYWORDS),h2=hits(TIER2_KEYWORDS),h3=hits(TIER3_KEYWORDS);
+  if(h1>0&&h1>=h2&&h1>=h3)return 'tier1';
+  if(h2>0&&h2>=h3)return 'tier2';
+  if(h3>0)return 'tier3';
+  if(chipLabel&&NICHE_TIER_MAP[chipLabel])return NICHE_TIER_MAP[chipLabel];
+  return 'tier2'; // neutral default when nothing detected
+}
+
+function detectSponsorSignals(text){
+  var t=(text||'').toLowerCase();
+  return SPONSOR_KEYWORDS.filter(function(k){return t.indexOf(k)>=0;});
+}
+
+function computeScore(subs,nicheTier,sponsorMatches){
+  var nichePts=nicheTier==='tier1'?2:nicheTier==='tier2'?1:0;
+  var sponsorPts=Math.min(4,sponsorMatches.length*2);
+  var subBonus=0;
+  if(subs>=80000&&subs<=400000)subBonus=1;
+  else if(subs>400000&&subs<=1000000&&(nicheTier==='tier1'||sponsorPts>0))subBonus=1;
+  else if(subs<80000&&nicheTier==='tier1'&&sponsorPts>0)subBonus=1;
+  var total=nichePts+sponsorPts+subBonus;
+  var priority=total>=5?'premium':total>=3?'standard':'low';
+  return{nichePts:nichePts,sponsorPts:sponsorPts,subBonus:subBonus,total:total,priority:priority};
+}
+
+function priorityBadge(priority,score){
+  if(priority==='premium')return '<span class="tag t-h" style="font-size:10px">★ Premium Fit ('+score+')</span>';
+  if(priority==='standard')return '<span class="tag t-m" style="font-size:10px">Standard Fit ('+score+')</span>';
+  return '<span class="tag t-l" style="font-size:10px">Low Fit ('+score+')</span>';
+}
 
 var CRITERIA=[
   {id:'dead_space',label:'Dead Space',desc:'Long silences or boring one-takes with no energy'},
@@ -449,7 +505,7 @@ function renderContacts(){
     else html+='<div style="width:32px;height:32px;border-radius:50%;background:var(--b1);flex-shrink:0"></div>';
 
     html+='<div style="flex:1;min-width:0">';
-    html+='<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(l.name)+'</div>';
+    html+='<div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(l.name)+(l.priority?' '+priorityBadge(l.priority,l.score):'')+'</div>';
     html+='<div style="font-size:11px;color:var(--muted)">'+fmtN(l.subs)+' subs</div>';
     if(l.link) html+='<a href="'+esc(l.link)+'" target="_blank" style="font-size:11px;color:var(--blue)">View Channel ↗</a>';
     html+='</div>';
@@ -547,6 +603,12 @@ function toggleWk(btn){
   settings.weekendPause=WK_PAUSE;saveSettings();checkWeekend();
 }
 
+function toggleHideLow(btn){
+  hideLowFit=!hideLowFit;
+  btn.classList.toggle('on');
+  renderSearch();
+}
+
 function updateGmail(){
   var ok=settings.scriptUrl&&settings.scriptUrl.startsWith('https://script.google');
   var el=document.getElementById('gmail-status');
@@ -560,9 +622,9 @@ function clearBlocked(){
 }
 
 function exportCSV(){
-  var h=['Name','Link','Subs','Contact','Status','Sent','Video'];
+  var h=['Name','Link','Subs','Contact','Status','Sent','Video','NicheTier','SponsorSignals','Score','Priority'];
   var rows=leads.map(function(l){
-    return [l.name,l.link,fmtN(l.subs),l.contact||'',l.status,l.sentDate||'',l.videoTitle||'']
+    return [l.name,l.link,fmtN(l.subs),l.contact||'',l.status,l.sentDate||'',l.videoTitle||'',l.nicheTier||'',(l.sponsorSignals||[]).length,l.score||0,l.priority||'']
       .map(function(v){return '"'+String(v||'').replace(/"/g,'""')+'"';}).join(',');
   });
   var a=document.createElement('a');
@@ -586,7 +648,9 @@ async function doSearch(){
   if(!settings.ytKey){errEl.textContent='YouTube API Key required';errEl.style.display='block';return;}
   var kw=document.getElementById('kw').value.trim();
   var max=parseInt(document.getElementById('smax').value);
-  var queries=[];activeChips.forEach(function(i){queries.push(NICHES[i].query);});if(kw)queries.push(kw);
+  var queries=[];
+  activeChips.forEach(function(i){queries.push({q:NICHES[i].query,label:NICHES[i].label});});
+  if(kw)queries.push({q:kw,label:null});
   if(!queries.length){errEl.textContent='Select a niche or enter a keyword';errEl.style.display='block';return;}
   var btn=document.getElementById('btn-search');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Searching...';
@@ -595,12 +659,12 @@ async function doSearch(){
   try{
     var cidSet=new Set();var cidMap={};
     for(var q=0;q<queries.length;q++){
-      var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q='+encodeURIComponent(queries[q])+'&maxResults='+perQ+'&relevanceLanguage=en&key='+settings.ytKey);
+      var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q='+encodeURIComponent(queries[q].q)+'&maxResults='+perQ+'&relevanceLanguage=en&key='+settings.ytKey);
       var vd=await vr.json();
       if(vd.error)throw new Error(vd.error.message);
       (vd.items||[]).forEach(function(item){
         var cid=item.snippet.channelId;
-        if(!cidSet.has(cid)){cidSet.add(cid);cidMap[cid]={title:item.snippet.title,videoId:item.id.videoId};}
+        if(!cidSet.has(cid)){cidSet.add(cid);cidMap[cid]={title:item.snippet.title,videoId:item.id.videoId,chipLabel:queries[q].label};}
       });
     }
     var exIds=new Set(leads.map(function(l){return l.channelId||'';}));
@@ -642,12 +706,21 @@ async function doSearch(){
       if(!insta){var instaLine=desc.split('\n').find(function(ln){return ln.toLowerCase().includes('instagram')||ln.toLowerCase().includes('/ig/');});if(instaLine){var im2=instaLine.match(/@([a-zA-Z0-9_.]{2,30})/);if(im2)insta='@'+im2[1];}}
       var handle=ch.snippet&&ch.snippet.customUrl||'';
       var vi=cidMap[ch.id]||{};
+      // Score this lead: niche tier + sponsoring signals + sub range
+      var nicheTier=detectNicheTier(desc+' '+(vi.title||''),vi.chipLabel);
+      var sponsorMatches=detectSponsorSignals(desc);
+      var scoreObj=computeScore(subs,nicheTier,sponsorMatches);
       return{channelId:ch.id,name:ch.snippet&&ch.snippet.title||'',handle:handle,desc:desc,
         link:'https://youtube.com/'+(handle||'channel/'+ch.id),
         thumb:ch.snippet&&ch.snippet.thumbnails&&ch.snippet.thumbnails.default&&ch.snippet.thumbnails.default.url||'',
-        subs:subs,avgV:Math.round(views/vids),contact:em,insta:insta,videoTitle:vi.title||'',videoId:vi.videoId||''};
+        subs:subs,avgV:Math.round(views/vids),contact:em,insta:insta,videoTitle:vi.title||'',videoId:vi.videoId||'',
+        nicheTier:nicheTier,sponsorSignals:sponsorMatches,score:scoreObj.total,priority:scoreObj.priority};
     });
-    importSel=new Set(searchResults.map(function(_,i){return i;}));
+    // Pre-select everything except Low Fit leads
+    importSel=new Set(searchResults.map(function(ch,i){return ch.priority!=='low'?i:null;}).filter(function(i){return i!==null;}));
+    if(importSel.size===0){ // fallback: if everything is low, select all so user isn't stuck
+      importSel=new Set(searchResults.map(function(_,i){return i;}));
+    }
     renderSearch();
   }catch(e){errEl.textContent=e.message||'YouTube API error';errEl.style.display='block';document.getElementById('sresults').innerHTML='';}
   btn.disabled=false;btn.textContent='Search';
@@ -655,8 +728,11 @@ async function doSearch(){
 
 function renderSearch(){
   if(!searchResults.length){document.getElementById('sresults').innerHTML='<div class="empty"><div class="empty-icon">S</div><div style="font-size:14px;opacity:.5;color:var(--txt)">No results</div></div>';return;}
-  var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-    +'<div style="font-size:13px;color:var(--muted)">'+searchResults.length+' channels &middot; <span id="sel-lbl" style="color:var(--txt)">'+importSel.size+' selected</span></div>'
+  var premiumCount=searchResults.filter(function(c){return c.priority==='premium';}).length;
+  var standardCount=searchResults.filter(function(c){return c.priority==='standard';}).length;
+  var lowCount=searchResults.filter(function(c){return c.priority==='low';}).length;
+  var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
+    +'<div style="font-size:13px;color:var(--muted)">'+searchResults.length+' channels &middot; <span style="color:var(--gr)">'+premiumCount+' premium</span> &middot; <span style="color:var(--yw)">'+standardCount+' standard</span> &middot; <span style="color:var(--rd)">'+lowCount+' low</span> &middot; <span id="sel-lbl" style="color:var(--txt)">'+importSel.size+' selected</span></div>'
     +'<div style="display:flex;gap:8px">'
     +'<button class="btn btn-g btn-sm" onclick="selAll(true)">All</button>'
     +'<button class="btn btn-g btn-sm" onclick="selAll(false)">None</button>'
@@ -664,6 +740,7 @@ function renderSearch(){
     +'</div></div>';
   html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">';
   searchResults.forEach(function(ch,i){
+    if(hideLowFit&&ch.priority==='low')return; // visual filter only, doesn't touch index/array
     var sel=importSel.has(i);
     html+='<div class="card card-sm" id="sr-'+i+'" style="cursor:pointer;opacity:'+(sel?1:.4)+';border-color:'+(sel?'var(--acc-dim)':'var(--b1)')+'" onclick="toggleSel('+i+')">'
       +'<div style="display:flex;gap:10px;align-items:center">'
@@ -676,6 +753,10 @@ function renderSearch(){
       +(ch.insta?'<div style="font-size:11px;color:#c084fc">📸 '+esc(ch.insta)+'</div>':'')
       +(!ch.contact&&!ch.insta?'<div style="display:flex;gap:5px;margin-top:3px"><a href="https://www.google.com/search?q='+encodeURIComponent(ch.name+' youtube contact email')+'" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:var(--muted);border:1px solid var(--b2);border-radius:4px;padding:2px 6px;text-decoration:none">🔍 Google</a><a href="'+esc(ch.link)+'/about" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:var(--muted);border:1px solid var(--b2);border-radius:4px;padding:2px 6px;text-decoration:none">YT About</a></div>':'')
       +'</div></div>'
+      +'<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      +priorityBadge(ch.priority,ch.score)
+      +'<span style="font-size:10px;color:var(--muted)">niche: '+ch.nicheTier+(ch.sponsorSignals.length?' &middot; sponsor signals: '+ch.sponsorSignals.length:'')+'</span>'
+      +'</div>'
       +(ch.videoTitle?'<div style="font-size:11px;color:var(--muted);margin-top:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">via: '+esc(ch.videoTitle)+'</div>':'')
       +'</div>';
   });
@@ -700,7 +781,7 @@ function openImportModal(){
   document.getElementById('imp-list').innerHTML=items.map(function(ch){
     return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b1)">'
       +(ch.thumb?'<img src="'+ch.thumb+'" style="width:30px;height:30px;border-radius:50%;object-fit:cover">':'<div style="width:30px;height:30px;border-radius:50%;background:var(--b1)"></div>')
-      +'<div style="flex:1"><div style="font-size:13px;font-weight:500">'+esc(ch.name)+'</div>'
+      +'<div style="flex:1"><div style="font-size:13px;font-weight:500">'+esc(ch.name)+' '+priorityBadge(ch.priority,ch.score)+'</div>'
       +'<div style="font-size:11px;color:var(--muted)">'+fmtN(ch.subs)+' subs'+(ch.contact?' &middot; '+esc(ch.contact):'')+'</div></div>'
       +(ch.videoTitle?'<div style="font-size:11px;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ch.videoTitle)+'</div>':'')
       +'</div>';
@@ -715,6 +796,7 @@ function confirmImport(){
       channelId:ch.channelId,name:ch.name,link:ch.link,thumb:ch.thumb,
       subs:ch.subs,avgV:ch.avgV,contact:ch.contact,insta:ch.insta||'',desc:ch.desc||'',
       videoTitle:ch.videoTitle,videoId:ch.videoId,
+      nicheTier:ch.nicheTier,sponsorSignals:ch.sponsorSignals,score:ch.score,priority:ch.priority,
       status:'New',subject:'',emailBody:'',instaDM:'',analysis:null,mainIssue:'',observation:'',fitNote:'',
       sentDate:'',followUpDate:'',notes:''});
   });
@@ -729,6 +811,9 @@ async function generateBatch(){
   if(daily.count>=LIMIT){showToast('Daily limit reached ('+LIMIT+'). Come back tomorrow!');return;}
   var todo=leads.filter(function(l){return l.status==='New'&&!l.emailBody;});
   if(!todo.length){showToast('No new leads. Import more first!');openView('find');return;}
+  // Process highest-priority leads first (premium > standard > low)
+  var pOrder={premium:0,standard:1,low:2};
+  todo.sort(function(a,b){return (pOrder[a.priority]!==undefined?pOrder[a.priority]:1)-(pOrder[b.priority]!==undefined?pOrder[b.priority]:1);});
   var proc=todo.slice(0,Math.min(10,LIMIT-daily.count));
   var btn=document.getElementById('btn-gen');btn.disabled=true;
   for(var i=0;i<proc.length;i++){
@@ -761,8 +846,22 @@ async function generateEmail(lead){
     learningCtx+='\nUse these patterns to make the email more targeted. If this channel resembles a skipped pattern, mention in analysis why it might still be worth contacting (or flag it). If it matches approved patterns, lean into what worked.\n';
   }
 
+  // Priority/scoring context — tells the AI how confident and which social proof angle to lean into
+  var nicheTier=lead.nicheTier||'tier2';
+  var sponsorCount=(lead.sponsorSignals||[]).length;
+  var priority=lead.priority||'standard';
+  var priorityGuidance='';
+  if(priority==='premium'){
+    priorityGuidance='This is a PREMIUM FIT lead (niche tier: '+nicheTier+', '+sponsorCount+' sponsoring signals detected, subscriber range fits well). Write with full confidence — this channel likely has real budget. Lean fully into the Harry Kersh proof (141k views on a 34k-subscriber channel, 3.5x the norm) and explain briefly WHY it worked (pacing, hook timing, sound design), not just that it happened. Do not mention a price in this email.';
+  }else if(priority==='standard'){
+    priorityGuidance='This is a STANDARD FIT lead (niche tier: '+nicheTier+', '+sponsorCount+' sponsoring signals detected). Use a confident but not overly aggressive tone. Mention the Harry Kersh proof briefly. Do not mention a price in this email.';
+  }else{
+    priorityGuidance='This is a LOW FIT lead (niche tier: '+nicheTier+', '+sponsorCount+' sponsoring signals detected, weaker subscriber/niche match). Keep the email short and low-pressure — treat it as a long-shot, not a priority follow-up target.';
+  }
+
   var prompt='You are analyzing a YouTube channel to write a cold outreach email for Uldis Kipens, a narrative long-form video editor.\n\n'
     +'Channel: '+lead.name+'\nSubscribers: '+fmtN(lead.subs)+'\nRecent video: '+lead.videoTitle+'\nDescription: '+(lead.desc||'').slice(0,400)+'\n'
+    +'\nLEAD SCORE CONTEXT: '+priorityGuidance+'\n'
     +(feedback.instructions?'\nPERMANENT INSTRUCTIONS FROM ULDIS (always follow these):\n'+feedback.instructions+'\n':'')
     +learningCtx+'\n'
     +'Uldis specializes in narrative storytelling, pacing, and retention for long-form YouTube videos. His portfolio: uldiskipens.com.\n'
@@ -815,7 +914,7 @@ function renderQueue(){
       +'<div style="display:flex;align-items:center;gap:12px;padding:14px 16px">'
       +(l.thumb?'<img src="'+esc(l.thumb)+'" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:1px solid var(--b2);flex-shrink:0">':'<div style="width:36px;height:36px;border-radius:50%;background:var(--b1);flex-shrink:0;border:1px solid var(--b2)"></div>')
       +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:14px;font-weight:500;margin-bottom:2px">'+esc(l.name)+'</div>'
+      +'<div style="font-size:14px;font-weight:500;margin-bottom:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc(l.name)+(l.priority?priorityBadge(l.priority,l.score):'')+'</div>'
       +'<div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">'
       +'<span>'+fmtN(l.subs)+' subs</span>'
       +(l.videoTitle?'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px">'+esc(l.videoTitle)+'</span>':'')
@@ -836,21 +935,22 @@ function openReview(id){
   if(!l||!l.emailBody){showToast('No email generated yet');return;}
   currentReview=id;
   document.getElementById('rv-name').textContent=l.name;
-  var contactDisplay = [];
-  if(hasEmail) contactDisplay.push('📧 '+contact);
-  if(hasInsta) contactDisplay.push('📸 '+instaHandle);
-  if(!hasEmail&&!hasInsta) contactDisplay.push('⚠️ no contact found');
-  document.getElementById('rv-meta').textContent = fmtN(l.subs)+' subs · '+contactDisplay.join(' · ');
-  document.getElementById('rv-subject').textContent='Subject: '+l.subject;
-  document.getElementById('rv-body').textContent=l.emailBody;
-  document.getElementById('rv-link').href=l.videoId?'https://youtube.com/watch?v='+l.videoId:l.link;
-  document.getElementById('corr-inp').value='';
 
   // Detect contact type
   var contact = l.contact||'';
   var instaHandle = l.insta||'';
   var hasEmail = contact.includes('@') && !contact.startsWith('@');
   var hasInsta = instaHandle.length > 0;
+
+  var contactDisplay = [];
+  if(hasEmail) contactDisplay.push('📧 '+contact);
+  if(hasInsta) contactDisplay.push('📸 '+instaHandle);
+  if(!hasEmail&&!hasInsta) contactDisplay.push('⚠️ no contact found');
+  document.getElementById('rv-meta').textContent = fmtN(l.subs)+' subs · '+contactDisplay.join(' · ')+(l.priority?' · '+l.priority+' fit ('+l.score+')':'');
+  document.getElementById('rv-subject').textContent='Subject: '+l.subject;
+  document.getElementById('rv-body').textContent=l.emailBody;
+  document.getElementById('rv-link').href=l.videoId?'https://youtube.com/watch?v='+l.videoId:l.link;
+  document.getElementById('corr-inp').value='';
 
   // Show/hide send buttons
   document.getElementById('btn-send').style.display = hasEmail ? 'inline-flex' : 'none';
@@ -882,6 +982,10 @@ function openReview(id){
   }
 
   var aHtml='';
+  if(l.priority){
+    var pColor=l.priority==='premium'?'var(--gr)':l.priority==='standard'?'var(--yw)':'var(--rd)';
+    aHtml+='<div style="margin-bottom:12px;padding:9px 12px;background:var(--bg);border:1px solid var(--b2);border-radius:8px;font-size:12px;color:'+pColor+'">Lead score: '+l.score+' ('+l.priority+' fit) &middot; niche: '+l.nicheTier+' &middot; sponsor signals: '+((l.sponsorSignals||[]).length)+'</div>';
+  }
   if(l.fitNote){
     var isWarning=l.fitNote.toLowerCase().indexOf('similar to skipped')>=0||l.fitNote.toLowerCase().indexOf('resembles')>=0;
     aHtml+='<div style="margin-bottom:12px;padding:9px 12px;background:'+(isWarning?'var(--yw-bg)':'var(--blue-bg)')+';border:1px solid '+(isWarning?'var(--yw-b)':'var(--blue-b)')+';border-radius:8px;font-size:12px;color:'+(isWarning?'var(--yw)':'var(--blue)')+'">🧠 <strong>AI Learning:</strong> '+esc(l.fitNote)+'</div>';
@@ -1055,7 +1159,7 @@ function renderPipeline(){
     var items=leads.filter(function(l){return l.status===stage.id;});
     html+='<div class="pcol"><div class="pcol-title" style="color:'+stage.color+'">'+stage.label+' ('+items.length+')</div>';
     items.forEach(function(l){
-      html+='<div class="pcol-card"><div style="font-weight:500;margin-bottom:2px">'+esc(l.name)+'</div>'
+      html+='<div class="pcol-card"><div style="font-weight:500;margin-bottom:2px">'+esc(l.name)+(l.priority?' '+priorityBadge(l.priority,l.score):'')+'</div>'
         +'<div style="font-size:11px;color:var(--muted)">'+fmtN(l.subs)+' subs'+(l.sentDate?' &middot; '+l.sentDate:'')+'</div>'
         +'<div style="margin-top:7px;display:flex;gap:4px;flex-wrap:wrap">';
       if(stage.id==='Sent'){html+='<button class="btn btn-g btn-sm" style="font-size:10px;padding:3px 8px" onclick="moveTo(\''+l.id+'\',\'Replied\')">Replied</button><button class="btn btn-rd btn-sm" style="font-size:10px;padding:3px 8px" onclick="moveTo(\''+l.id+'\',\'Not Interested\')">No</button>';}
@@ -1081,7 +1185,7 @@ function renderSent(){
     html+='<div class="card card-sm" style="display:flex;align-items:center;gap:12px'+(fuDue?';border-color:var(--yw)':'')+'">'+
       (l.thumb?'<img src="'+esc(l.thumb)+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0">':'<div style="width:32px;height:32px;border-radius:50%;background:var(--b1);flex-shrink:0"></div>')
       +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:13px;font-weight:500">'+esc(l.name)+'</div>'
+      +'<div style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+esc(l.name)+(l.priority?priorityBadge(l.priority,l.score):'')+'</div>'
       +'<div style="font-size:11px;color:var(--muted)">'+(l.sentDate||l.date)+' &middot; '+fmtN(l.subs)+' subs'+(l.contact?' &middot; '+esc(l.contact):'')+'</div>'
       +(fuDue?'<div style="font-size:11px;color:var(--yw);margin-top:2px">Follow-up due today</div>':'')
       +'</div>'
@@ -1173,26 +1277,6 @@ async function sendFollowUp(l, num){
       : 'Hey '+firstName+', last one from me, I promise! If you ever need a long-form editor, you know where to find me. Portfolio: uldiskipens.com. Good luck with the channel! Cheers, Uldis';
   }
 
-  // Try AI polish if key available
-  if(settings.anthropicKey&&settings.anthropicKey.startsWith('sk-ant')){
-    try{
-      var r=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,
-          system:'Rewrite this follow-up cold email to sound natural and human. Short, max 5 lines, no emojis, plain text. Keep the portfolio link. Reply ONLY as JSON: {"subject":"...","body":"..."}',
-          messages:[{role:'user',content:'Subject: '+subject+'\n\nBody:\n'+body}]})
-      });
-      if(r.ok){
-        var d2=await r.json();
-        var txt=(d2.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
-        var parsed=JSON.parse(txt);
-        if(parsed.subject) subject=parsed.subject;
-        if(parsed.body) body=parsed.body;
-      }
-    }catch(e){}
-  }
-
   // Mark as sent IMMEDIATELY to prevent re-triggering on next load
   if(num===1){ l.fu1Sent=true; l.status='FU1 Sent'; var d3=new Date(); d3.setDate(d3.getDate()+4); l.fu2Date=d3.toISOString().slice(0,10); }
   else { l.fu2Sent=true; l.status='FU2 Sent'; l.fu2Date=''; }
@@ -1235,8 +1319,6 @@ async function sendFollowUp(l, num){
   l['fu'+num+'SentDate']=new Date().toISOString().slice(0,10);
   saveLeads();
 }
-
-function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
 
 function closeModal(id){document.getElementById(id).style.display='none';}
 var toastT;
