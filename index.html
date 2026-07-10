@@ -166,6 +166,15 @@ textarea{resize:vertical;line-height:1.6}
       </div>
       <div id="serr" style="display:none;font-size:12px;color:var(--rd);background:var(--rd-bg);border:1px solid var(--rd-b);padding:8px 12px;border-radius:7px;margin-top:10px"></div>
     </div>
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Oder: Finde Kanäle, die einem Referenzkanal ähnlich sind (kein Keyword-Erfinden nötig — die KI schaut sich den Kanal an und sucht selbst passende Begriffe)</div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="ref-channel" placeholder="Kanal-URL, @handle oder Name, z.B. https://youtube.com/@TobiasLanger" style="flex:1">
+        <button class="btn btn-p" id="btn-similar" onclick="findSimilarChannels()">Ähnliche finden</button>
+      </div>
+      <div id="similar-status" style="display:none;font-size:12px;color:var(--muted);margin-top:8px"></div>
+      <div id="similar-err" style="display:none;font-size:12px;color:var(--rd);background:var(--rd-bg);border:1px solid var(--rd-b);padding:8px 12px;border-radius:7px;margin-top:10px"></div>
+    </div>
     <div id="sresults"><div class="empty"><div class="empty-icon">S</div><div style="font-size:14px;color:var(--txt);opacity:.5">Choose a niche or enter a keyword</div></div></div>
   </div>
   <div class="view" id="view-contacts">
@@ -655,6 +664,86 @@ async function doSearch(){
   var btn=document.getElementById('btn-search');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Searching...';
   document.getElementById('sresults').innerHTML='<div class="empty"><span class="spin" style="width:20px;height:20px;border-width:3px"></span></div>';
+  await executeSearch(queries,max,errEl,'sresults');
+  btn.disabled=false;btn.textContent='Search';
+}
+
+// ── FIND SIMILAR CHANNELS ────────────────────────────────────
+// Resolves a reference channel (URL/@handle/name), reads its recent videos + description,
+// asks Claude to generate search queries capturing its style/niche, then runs the same search pipeline.
+async function resolveChannelId(input){
+  input=input.trim();
+  var m=input.match(/youtube\.com\/channel\/(UC[\w-]+)/);
+  if(m)return m[1];
+  var handleMatch=input.match(/youtube\.com\/@([\w.-]+)/) || input.match(/^@([\w.-]+)$/);
+  var handle=handleMatch?handleMatch[1]:null;
+  if(handle){
+    var r=await fetch('https://www.googleapis.com/youtube/v3/channels?part=id&forHandle='+encodeURIComponent(handle)+'&key='+settings.ytKey);
+    var d=await r.json();
+    if(d.items&&d.items.length)return d.items[0].id;
+  }
+  // Fallback: treat as free-text search for the channel name
+  var sr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q='+encodeURIComponent(input)+'&maxResults=1&key='+settings.ytKey);
+  var sd=await sr.json();
+  if(sd.error)throw new Error(sd.error.message);
+  if(sd.items&&sd.items.length)return sd.items[0].snippet.channelId||sd.items[0].id.channelId;
+  throw new Error('Kanal nicht gefunden');
+}
+
+async function findSimilarChannels(){
+  var errEl=document.getElementById('similar-err');errEl.style.display='none';
+  var statusEl=document.getElementById('similar-status');statusEl.style.display='none';
+  if(!settings.ytKey){errEl.textContent='YouTube API Key required';errEl.style.display='block';return;}
+  if(!settings.anthropicKey){errEl.textContent='Anthropic API Key required (for query generation)';errEl.style.display='block';return;}
+  var input=document.getElementById('ref-channel').value.trim();
+  if(!input){errEl.textContent='Kanal-URL, @handle oder Name eingeben';errEl.style.display='block';return;}
+  var btn=document.getElementById('btn-similar');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analysiere...';
+  statusEl.style.display='block';statusEl.textContent='Löse Kanal auf...';
+  document.getElementById('sresults').innerHTML='<div class="empty"><span class="spin" style="width:20px;height:20px;border-width:3px"></span></div>';
+  try{
+    var channelId=await resolveChannelId(input);
+    statusEl.textContent='Lade Kanal-Infos und letzte Videos...';
+    var cr=await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id='+channelId+'&key='+settings.ytKey);
+    var cd=await cr.json();
+    if(cd.error)throw new Error(cd.error.message);
+    if(!cd.items||!cd.items.length)throw new Error('Kanal-Details nicht gefunden');
+    var chInfo=cd.items[0];
+    var chDesc=chInfo.snippet.description||'';
+    var chTitle=chInfo.snippet.title||'';
+    var chSubs=parseInt(chInfo.statistics&&chInfo.statistics.subscriberCount||0);
+    var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&channelId='+channelId+'&order=date&maxResults=10&type=video&key='+settings.ytKey);
+    var vd=await vr.json();
+    if(vd.error)throw new Error(vd.error.message);
+    var videoTitles=(vd.items||[]).map(function(it){return it.snippet.title;});
+    statusEl.textContent='Generiere passende Suchbegriffe...';
+    var prompt='Reference YouTube channel: "'+chTitle+'" ('+fmtN(chSubs)+' subscribers)\n'
+      +'Channel description: '+chDesc.slice(0,300)+'\n'
+      +'Recent video titles:\n'+videoTitles.map(function(t){return '- '+t;}).join('\n')+'\n\n'
+      +'Based on this channel\'s content style, format, and niche, generate 5 short YouTube search queries (3-6 words each, in English) that would surface OTHER, DIFFERENT channels with a similar style/format/production quality — useful for finding cold-outreach leads for a video editor. Focus on style/format similarity (e.g. "high production truck vlog", "narrative documentary storytelling"), not just the exact topic.\n\n'
+      +'Reply ONLY with a valid JSON array of strings, e.g. ["query one","query two","query three","query four","query five"]';
+    var ar=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,messages:[{role:'user',content:prompt}]})
+    });
+    if(!ar.ok)throw new Error('Claude API '+ar.status);
+    var adata=await ar.json();
+    var araw=(adata.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
+    var queryStrings=JSON.parse(araw);
+    var queries=queryStrings.map(function(q){return{q:q,label:null};});
+    statusEl.textContent='Suche nach: '+queryStrings.join(' · ');
+    await executeSearch(queries,30,errEl,'sresults');
+    statusEl.style.display='none';
+  }catch(e){
+    errEl.textContent=e.message||'Fehler bei der Ähnlichkeitssuche';errEl.style.display='block';
+    statusEl.style.display='none';
+    document.getElementById('sresults').innerHTML='';
+  }
+  btn.disabled=false;btn.innerHTML='Ähnliche finden';
+}
+
+async function executeSearch(queries,max,errEl,resultsElId){
   var perQ=Math.max(5,Math.ceil(max/queries.length));
   try{
     var cidSet=new Set();var cidMap={};
@@ -671,7 +760,7 @@ async function doSearch(){
     var exLinks=new Set(leads.map(function(l){return(l.link||'').toLowerCase();}));
     blocked.forEach(function(b){if(b.channelId)exIds.add(b.channelId);if(b.link)exLinks.add(b.link.toLowerCase());});
     var fresh=Array.from(cidSet).filter(function(id){return !exIds.has(id);});
-    if(!fresh.length){document.getElementById('sresults').innerHTML='<div class="empty"><div class="empty-icon">ok</div><div style="font-size:14px;color:var(--txt);opacity:.5">All results already in your list</div></div>';btn.disabled=false;btn.textContent='Search';return;}
+    if(!fresh.length){document.getElementById(resultsElId).innerHTML='<div class="empty"><div class="empty-icon">ok</div><div style="font-size:14px;color:var(--txt);opacity:.5">All results already in your list</div></div>';return;}
     var allCh=[];
     for(var s=0;s<fresh.length;s+=50){
       var batch=fresh.slice(s,s+50).join(',');
@@ -722,8 +811,7 @@ async function doSearch(){
       importSel=new Set(searchResults.map(function(_,i){return i;}));
     }
     renderSearch();
-  }catch(e){errEl.textContent=e.message||'YouTube API error';errEl.style.display='block';document.getElementById('sresults').innerHTML='';}
-  btn.disabled=false;btn.textContent='Search';
+  }catch(e){errEl.textContent=e.message||'YouTube API error';errEl.style.display='block';document.getElementById(resultsElId).innerHTML='';}
 }
 
 function renderSearch(){
