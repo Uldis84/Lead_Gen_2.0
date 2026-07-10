@@ -152,6 +152,7 @@ textarea{resize:vertical;line-height:1.6}
   </div>
   <div class="view" id="view-find">
     <div class="eyebrow">Discovery</div><div class="section-title">Find Leads</div><div class="section-sub">Narrative storytelling creators on YouTube — auto-scored by niche, sponsoring signals and sub range</div>
+    <div id="yt-quota-display" style="font-size:11px;color:var(--muted);margin-bottom:14px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:8px 12px"></div>
     <div class="card" style="margin-bottom:16px">
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Click a niche to search instantly:</div>
       <div id="chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px"></div>
@@ -332,6 +333,25 @@ var settings=JSON.parse(localStorage.getItem('uh-s')||'{}');
 var leads=JSON.parse(localStorage.getItem('uh-l')||'[]');
 var blocked=JSON.parse(localStorage.getItem('uh-b')||'[]');
 var daily=JSON.parse(localStorage.getItem('uh-d')||'{"date":"","count":0}');
+var ytQuota=JSON.parse(localStorage.getItem('uh-yt')||'{"date":"","units":0}');
+function saveYtQuota(){localStorage.setItem('uh-yt',JSON.stringify(ytQuota));}
+function checkYtQuotaReset(){
+  var t=new Date().toISOString().slice(0,10);
+  if(ytQuota.date!==t){ytQuota={date:t,units:0};saveYtQuota();}
+}
+function addYtUnits(n){
+  checkYtQuotaReset();
+  ytQuota.units+=n;
+  saveYtQuota();
+  renderYtQuota();
+}
+function renderYtQuota(){
+  checkYtQuotaReset();
+  var el=document.getElementById('yt-quota-display');
+  if(!el)return;
+  var searchesLeft=Math.max(0,Math.floor((10000-ytQuota.units)/100));
+  el.textContent='YouTube-Suchkontingent heute: ~'+searchesLeft+' Suchen übrig (ca. '+ytQuota.units+'/10000 Einheiten verbraucht — resettet um Mitternacht Pacific Time)';
+}
 // Learning memory: stores approved/skipped channel patterns so AI can improve
 var feedback=JSON.parse(localStorage.getItem('uh-fb')||'{"approved":[],"skipped":[],"instructions":""}');
 function saveFeedback(){localStorage.setItem('uh-fb',JSON.stringify(feedback));}
@@ -435,6 +455,7 @@ function init(){
   checkWeekend();
   renderQueue();
   renderStats();
+  renderYtQuota();
   // Show badge for missing contacts
   var missing=leads.filter(function(l){return !l.contact&&!l.insta;}).length;
   var badge=document.getElementById('contacts-badge');
@@ -684,6 +705,7 @@ async function resolveChannelId(input){
   }
   // Fallback: treat as free-text search for the channel name
   var sr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q='+encodeURIComponent(input)+'&maxResults=1&key='+settings.ytKey);
+  addYtUnits(100);
   var sd=await sr.json();
   if(sd.error)throw new Error(sd.error.message);
   if(sd.items&&sd.items.length)return sd.items[0].snippet.channelId||sd.items[0].id.channelId;
@@ -704,7 +726,7 @@ async function findSimilarChannels(){
   try{
     var channelId=await resolveChannelId(input);
     statusEl.textContent='Lade Kanal-Infos und letzte Videos...';
-    var cr=await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id='+channelId+'&key='+settings.ytKey);
+    var cr=await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id='+channelId+'&key='+settings.ytKey);
     var cd=await cr.json();
     if(cd.error)throw new Error(cd.error.message);
     if(!cd.items||!cd.items.length)throw new Error('Kanal-Details nicht gefunden');
@@ -712,10 +734,15 @@ async function findSimilarChannels(){
     var chDesc=chInfo.snippet.description||'';
     var chTitle=chInfo.snippet.title||'';
     var chSubs=parseInt(chInfo.statistics&&chInfo.statistics.subscriberCount||0);
-    var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&channelId='+channelId+'&order=date&maxResults=10&type=video&key='+settings.ytKey);
-    var vd=await vr.json();
-    if(vd.error)throw new Error(vd.error.message);
-    var videoTitles=(vd.items||[]).map(function(it){return it.snippet.title;});
+    var uploadsPlaylistId=chInfo.contentDetails&&chInfo.contentDetails.relatedPlaylists&&chInfo.contentDetails.relatedPlaylists.uploads;
+    var videoTitles=[];
+    if(uploadsPlaylistId){
+      // playlistItems.list costs 1 unit vs. 100 for search.list — same result (channel's recent uploads)
+      var vr=await fetch('https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId='+uploadsPlaylistId+'&maxResults=10&key='+settings.ytKey);
+      var vd=await vr.json();
+      if(vd.error)throw new Error(vd.error.message);
+      videoTitles=(vd.items||[]).map(function(it){return it.snippet.title;});
+    }
     statusEl.textContent='Generiere passende Suchbegriffe...';
     var prompt='Reference YouTube channel: "'+chTitle+'" ('+fmtN(chSubs)+' subscribers)\n'
       +'Channel description: '+chDesc.slice(0,300)+'\n'
@@ -749,6 +776,7 @@ async function executeSearch(queries,max,errEl,resultsElId){
     var cidSet=new Set();var cidMap={};
     for(var q=0;q<queries.length;q++){
       var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q='+encodeURIComponent(queries[q].q)+'&maxResults='+perQ+'&relevanceLanguage=en&key='+settings.ytKey);
+      addYtUnits(100);
       var vd=await vr.json();
       if(vd.error)throw new Error(vd.error.message);
       (vd.items||[]).forEach(function(item){
