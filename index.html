@@ -1393,41 +1393,69 @@ async function sendFollowUp(l, num){
       : 'Hey '+firstName+', last one from me, I promise! If you ever need a long-form editor, you know where to find me. Portfolio: uldiskipens.com. Good luck with the channel! Cheers, Uldis';
   }
 
-  // Mark as sent IMMEDIATELY to prevent re-triggering on next load
-  if(num===1){ l.fu1Sent=true; l.status='FU1 Sent'; var d3=new Date(); d3.setDate(d3.getDate()+4); l.fu2Date=d3.toISOString().slice(0,10); }
-  else { l.fu2Sent=true; l.status='FU2 Sent'; l.fu2Date=''; }
-  saveLeads(); // save immediately so reload won't re-trigger
-
-  // Try AI polish if key available
+  // Try AI polish if key available (must happen before sending)
   if(settings.anthropicKey&&settings.anthropicKey.startsWith('sk-ant')){
     try{
-      var r=await fetch('https://api.anthropic.com/v1/messages',{
+      var rPolish=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
         body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,
           system:'Rewrite this follow-up cold email. Short, max 5 lines, no em dashes, no emojis, plain text, single paragraph. Keep the portfolio link. Reply ONLY as JSON: {"subject":"...","body":"..."}',
           messages:[{role:'user',content:'Subject: '+subject+'\n\nBody:\n'+body}]})
       });
-      if(r.ok){
-        var d2=await r.json();
-        var txt=(d2.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
-        var parsed=JSON.parse(txt);
-        if(parsed.subject) subject=parsed.subject;
-        if(parsed.body) body=parsed.body;
+      if(rPolish.ok){
+        var dPolish=await rPolish.json();
+        var txtPolish=(dPolish.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
+        var parsedPolish=JSON.parse(txtPolish);
+        if(parsedPolish.subject) subject=parsedPolish.subject;
+        if(parsedPolish.body) body=parsedPolish.body;
       }
     }catch(e){}
   }
 
-  // Send via Apps Script or mailto fallback
+  // Attempt to send FIRST — only mark as sent once we know it worked
+  var sendOk=false, sendErr=null;
   if(l.contact&&l.contact.includes('@')&&!l.contact.startsWith('@')){
     try{
       if(settings.scriptUrl&&settings.scriptUrl.startsWith('https://script.google')){
-        await fetch(settings.scriptUrl,{method:'POST',body:JSON.stringify({action:'sendEmail',to:l.contact,subject:subject,body:body,name:l.name})});
+        var resp=await fetch(settings.scriptUrl,{method:'POST',body:JSON.stringify({action:'sendEmail',to:l.contact,subject:subject,body:body,name:l.name})});
+        if(resp.ok){
+          var respJson=null;
+          try{ respJson=await resp.json(); }catch(e2){}
+          if(!respJson||respJson.error){ sendErr=(respJson&&respJson.error)||('HTTP '+resp.status); }
+          else { sendOk=true; }
+        } else {
+          sendErr='HTTP '+resp.status;
+        }
       } else {
+        // mailto fallback can't be confirmed programmatically — treat as sent once the tab opens
         window.open('mailto:'+encodeURIComponent(l.contact)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body),'_blank');
+        sendOk=true;
       }
-    }catch(e){ console.log('FU send failed:',e); }
+    }catch(e){ sendErr=e&&e.message?e.message:String(e); }
+  } else {
+    sendErr='No valid email address on lead';
   }
+
+  if(!sendOk){
+    l['fu'+num+'LastError']=sendErr;
+    l['fu'+num+'FailCount']=(l['fu'+num+'FailCount']||0)+1;
+    saveLeads();
+    showToast('Follow-up '+num+' for '+(l.name||l.contact)+' FAILED: '+sendErr,'err');
+    // give up after 3 failed attempts so it doesn't retry forever silently
+    if(l['fu'+num+'FailCount']>=3){
+      if(num===1){ l.fu1Sent=true; l.status='FU1 Failed'; }
+      else { l.fu2Sent=true; l.status='FU2 Failed'; }
+      saveLeads();
+      showToast((l.name||l.contact)+': follow-up '+num+' gave up after 3 failed attempts — check manually','err');
+    }
+    return; // don't mark as sent, don't store fu subject/body as if it went out
+  }
+
+  // Mark as sent only now that we've confirmed it actually went out
+  if(num===1){ l.fu1Sent=true; l.status='FU1 Sent'; var d3=new Date(); d3.setDate(d3.getDate()+4); l.fu2Date=d3.toISOString().slice(0,10); }
+  else { l.fu2Sent=true; l.status='FU2 Sent'; l.fu2Date=''; }
+  saveLeads(); // save immediately so reload won't re-trigger
 
   // Store for reference
   l['fu'+num+'Subject']=subject;
