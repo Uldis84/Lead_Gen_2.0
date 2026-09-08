@@ -216,6 +216,17 @@ textarea{resize:vertical;line-height:1.6}
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:500;margin-bottom:6px">E-Mail-Signatur</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Wird automatisch an jede generierte E-Mail und jeden Follow-up angehängt. Leere Felder werden einfach weggelassen — kein toter Link geht raus.</div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Name</label><input type="text" id="inp-sig-name" placeholder="Uldis"></div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Künstlername / Handle (optional)</label><input type="text" id="inp-sig-handle" placeholder="uldis.edits"></div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Website</label><input type="text" id="inp-sig-web" placeholder="uldiskipens.com"></div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Instagram (nur eintragen, sobald Content drauf ist)</label><input type="text" id="inp-sig-insta" placeholder="instagram.com/uldis.edits"></div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">YouTube (nur eintragen, sobald Content drauf ist)</label><input type="text" id="inp-sig-yt" placeholder="youtube.com/@uldis.edits"></div>
+      <div style="margin-bottom:12px"><label style="font-size:12px;color:#888;display:block;margin-bottom:6px">Impressum-Link (optional)</label><input type="text" id="inp-sig-impressum" placeholder="uldiskipens.com/impressum"></div>
+      <button class="btn btn-p btn-sm" onclick="saveSignature()">Signatur speichern</button>
+    </div>
+    <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:6px">Lead Scoring Weights</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">How leads are scored during search. Niche tier: Tier 1 (finance/business/software/B2B) = 2pts, Tier 2 (tech/education/documentary/auto/health) = 1pt, Tier 3 (food/travel/gaming/vlog/comedy) = 0pts. Sponsoring signals found in description = up to +4pts. Sub range 80k–400k = +1pt (also 400k–1M if Tier 1 or sponsored). Score 5+ = Premium Fit, 3-4 = Standard Fit, 0-2 = Low Fit.</div>
     </div>
@@ -361,6 +372,21 @@ function saveFeedback(){localStorage.setItem('uh-fb',JSON.stringify(feedback));}
 // e.g. "Focus on investigation and true crime, avoid pure video essays"
 var LIMIT=parseInt(settings.dailyLimit||35);
 var WK_PAUSE=settings.weekendPause!==false;
+
+// Builds the email sign-off. Only includes links that are actually filled in —
+// an empty/unfilled field is skipped entirely so no dead links go out.
+function buildSignature(){
+  var lines=[];
+  var name=(settings.signatureName||'Uldis').trim();
+  var handle=(settings.signatureHandle||'').trim();
+  lines.push(handle ? name+' ('+handle+')' : name);
+  var web=(settings.website||'uldiskipens.com').trim();
+  if(web) lines.push(web);
+  if((settings.instagramUrl||'').trim()) lines.push('Instagram: '+settings.instagramUrl.trim());
+  if((settings.youtubeUrl||'').trim()) lines.push('YouTube: '+settings.youtubeUrl.trim());
+  if((settings.impressumUrl||'').trim()) lines.push('Impressum: '+settings.impressumUrl.trim());
+  return lines.join('\n');
+}
 var activeChips=new Set();
 var searchResults=[];
 var importSel=new Set();
@@ -600,10 +626,27 @@ function loadUI(){
   document.getElementById('inp-lim').value=settings.dailyLimit||35;
   document.getElementById('inp-script').value=settings.scriptUrl||'';
   document.getElementById('inp-instructions').value=feedback.instructions||'';
+  document.getElementById('inp-sig-name').value=settings.signatureName||'Uldis';
+  document.getElementById('inp-sig-handle').value=settings.signatureHandle||'';
+  document.getElementById('inp-sig-web').value=settings.website||'uldiskipens.com';
+  document.getElementById('inp-sig-insta').value=settings.instagramUrl||'';
+  document.getElementById('inp-sig-yt').value=settings.youtubeUrl||'';
+  document.getElementById('inp-sig-impressum').value=settings.impressumUrl||'';
   document.getElementById('bc').textContent=blocked.length;
   var tw=document.getElementById('toggle-wk');
   WK_PAUSE?tw.classList.add('on'):tw.classList.remove('on');
   updateGmail();
+}
+
+function saveSignature(){
+  settings.signatureName=document.getElementById('inp-sig-name').value.trim();
+  settings.signatureHandle=document.getElementById('inp-sig-handle').value.trim();
+  settings.website=document.getElementById('inp-sig-web').value.trim();
+  settings.instagramUrl=document.getElementById('inp-sig-insta').value.trim();
+  settings.youtubeUrl=document.getElementById('inp-sig-yt').value.trim();
+  settings.impressumUrl=document.getElementById('inp-sig-impressum').value.trim();
+  saveSettings();
+  showToast('Signatur gespeichert');
 }
 
 function saveKeys(){
@@ -995,7 +1038,7 @@ async function generateEmail(lead){
     +'- Open with ONE specific genuine observation about what WORKS in this channel (not generic)\n'
     +'- Identify 1 concrete weakness and suggest a specific technique to fix it\n'
     +'- Mention Harry Kersh as social proof naturally\n'
-    +'- End: portfolio uldiskipens.com + ask for 10 min call\n'
+    +'- Ask for a 10 min call, then end with JUST a short sign-off phrase (e.g. "Cheers," or "Beste Grüße,") and NOTHING after it — no name, no links, no portfolio mention. A signature block with links is appended separately after your output.\n'
     +'- Casual and human. NOT salesy. Max 100 words.\n'
     +'- First person only. No emojis. Plain text.\n\n'
     +'Reply ONLY with valid JSON:\n'
@@ -1010,7 +1053,7 @@ async function generateEmail(lead){
   var data=await r.json();
   var raw=(data.content||[]).map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
   var res=JSON.parse(raw);
-  lead.subject=res.subject||'';lead.emailBody=res.body||'';
+  lead.subject=res.subject||'';lead.emailBody=(res.body||'')+'\n'+buildSignature();
   lead.analysis=res.analysis||{};lead.mainIssue=res.main_issue||'';lead.observation=res.observation||'';
   lead.fitNote=res.fit_note||'';
   lead.status='Ready';
@@ -1384,13 +1427,13 @@ async function sendFollowUp(l, num){
   if(num===1){
     subject = 'Re: '+l.subject;
     body = isGerman
-      ? 'Hey '+firstName+', nur kurze Nachfrage, ist meine letzte Mail im Postfach-Chaos untergegangen? Kein Stress, falls du gerade viel um die Ohren hast. Ich denke nur, dass ich dir wirklich helfen könnte, mehr Zuschauer bis zum Ende zu halten. Portfolio: uldiskipens.com. Beste Grüße, Uldis'
-      : 'Hey '+firstName+', just checking in, did my last email get lost in the inbox chaos? No worries if you\'re slammed. I genuinely think I could help boost your retention in a noticeable way. Portfolio: uldiskipens.com. Cheers, Uldis';
+      ? 'Hey '+firstName+', nur kurze Nachfrage, ist meine letzte Mail im Postfach-Chaos untergegangen? Kein Stress, falls du gerade viel um die Ohren hast. Ich denke nur, dass ich dir wirklich helfen könnte, mehr Zuschauer bis zum Ende zu halten. Beste Grüße,'
+      : 'Hey '+firstName+', just checking in, did my last email get lost in the inbox chaos? No worries if you\'re slammed. I genuinely think I could help boost your retention in a noticeable way. Cheers,';
   } else {
     subject = isGerman ? 'Letzte Nachricht: '+firstName : 'Last one, promise: '+firstName;
     body = isGerman
-      ? 'Hey '+firstName+', letzte Nachricht von mir, versprochen! Falls du irgendwann einen Editor für Long-Form Content brauchst, ich bin da. Portfolio: uldiskipens.com. Viel Erfolg mit dem Kanal! Beste Grüße, Uldis'
-      : 'Hey '+firstName+', last one from me, I promise! If you ever need a long-form editor, you know where to find me. Portfolio: uldiskipens.com. Good luck with the channel! Cheers, Uldis';
+      ? 'Hey '+firstName+', letzte Nachricht von mir, versprochen! Falls du irgendwann einen Editor für Long-Form Content brauchst, ich bin da. Viel Erfolg mit dem Kanal! Beste Grüße,'
+      : 'Hey '+firstName+', last one from me, I promise! If you ever need a long-form editor, you know where to find me. Good luck with the channel! Cheers,';
   }
 
   // Try AI polish if key available (must happen before sending)
@@ -1400,7 +1443,7 @@ async function sendFollowUp(l, num){
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':settings.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
         body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:300,
-          system:'Rewrite this follow-up cold email. Short, max 5 lines, no em dashes, no emojis, plain text, single paragraph. Keep the portfolio link. Reply ONLY as JSON: {"subject":"...","body":"..."}',
+          system:'Rewrite this follow-up cold email. Short, max 5 lines, no em dashes, no emojis, plain text, single paragraph. End with just a short sign-off phrase (e.g. "Cheers," or "Beste Grüße,") and NOTHING after it — no name, no links, no portfolio mention. A signature block is appended separately after your output. Reply ONLY as JSON: {"subject":"...","body":"..."}',
           messages:[{role:'user',content:'Subject: '+subject+'\n\nBody:\n'+body}]})
       });
       if(rPolish.ok){
@@ -1412,6 +1455,9 @@ async function sendFollowUp(l, num){
       }
     }catch(e){}
   }
+
+  // Append the configured signature block (name/handle + only the links that are actually filled in)
+  body = body + '\n' + buildSignature();
 
   // Attempt to send FIRST — only mark as sent once we know it worked
   var sendOk=false, sendErr=null;
