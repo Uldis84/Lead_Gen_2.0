@@ -228,7 +228,7 @@ textarea{resize:vertical;line-height:1.6}
     </div>
     <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:6px">Lead Scoring Weights</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">How leads are scored during search. Niche tier: Tier 1 (finance/business/software/B2B) = 2pts, Tier 2 (tech/education/documentary/auto/health) = 1pt, Tier 3 (food/travel/gaming/vlog/comedy) = 0pts. Sponsoring signals found in description = up to +4pts. Sub range 80k–400k = +1pt (also 400k–1M if Tier 1 or sponsored). Score 5+ = Premium Fit, 3-4 = Standard Fit, 0-2 = Low Fit.</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">How leads are scored during search. Niche tier: Tier 1 (finance/business/software/B2B) = 2pts, Tier 2 (tech/education/documentary/auto/health) = 1pt, Tier 3 (food/travel/gaming/vlog/comedy) = 0pts. Sponsoring signals found in description = up to +4pts. Sub range 80k–400k = +1pt (also 400k–2M if Tier 1 or sponsored). Score 5+ = Premium Fit, 3-4 = Standard Fit, 0-2 = Low Fit.</div>
     </div>
     <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:6px">Permanent AI Instructions</div>
@@ -442,7 +442,7 @@ function computeScore(subs,nicheTier,sponsorMatches){
   var sponsorPts=Math.min(4,sponsorMatches.length*2);
   var subBonus=0;
   if(subs>=80000&&subs<=400000)subBonus=1;
-  else if(subs>400000&&subs<=1000000&&(nicheTier==='tier1'||sponsorPts>0))subBonus=1;
+  else if(subs>400000&&subs<=2000000&&(nicheTier==='tier1'||sponsorPts>0))subBonus=1;
   else if(subs<80000&&nicheTier==='tier1'&&sponsorPts>0)subBonus=1;
   var total=nichePts+sponsorPts+subBonus;
   var priority=total>=5?'premium':total>=3?'standard':'low';
@@ -1024,7 +1024,7 @@ async function generateEmail(lead){
     +(feedback.instructions?'\nPERMANENT INSTRUCTIONS FROM ULDIS (always follow these):\n'+feedback.instructions+'\n':'')
     +learningCtx+'\n'
     +'Uldis specializes in narrative storytelling, pacing, and retention for long-form YouTube videos. His portfolio: uldiskipens.com.\n'
-    +'Social proof: Harry Kersh (food/travel, 150k+ views per video) for documentary/narrative channels. ohnepixel (4.5M subs) for gaming/entertainment channels.\n\n'
+    +'Social proof: Harry Kersh (food/travel, 150k+ views per video) for documentary/narrative channels. Tobi Langer (700k+ subs) for larger established channels. ohnepixel (4.5M subs) for gaming/entertainment channels.\n\n'
     +'Evaluate this channel based on these criteria and identify the 2-3 biggest weaknesses:\n'
     +'1. dead_space: long silences, boring one-takes with no energy\n'
     +'2. intro_music: weak/missing background music, bad opening hook to pull audience in\n'
