@@ -205,6 +205,15 @@ textarea{resize:vertical;line-height:1.6}
       <button class="btn btn-p btn-sm" onclick="saveKeys()">Save Keys</button>
     </div>
     <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:500;margin-bottom:6px">Suchsprache</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Steuert die Niche-Chips, die generierten Suchbegriffe bei "Ähnliche Kanäle finden" und den relevanceLanguage/regionCode-Parameter der YouTube-Suche.</div>
+      <select id="inp-searchlang" style="width:100%;padding:9px;border-radius:8px" onchange="saveSearchLang()">
+        <option value="de">Deutsch (deutsche Kanäle bevorzugt)</option>
+        <option value="en">Englisch</option>
+        <option value="any">Beides / egal</option>
+      </select>
+    </div>
+    <div class="card" style="margin-bottom:16px">
       <div style="font-weight:500;margin-bottom:16px">Limits</div>
       <div class="setting-row">
         <div><div style="font-size:13px;font-weight:500">Emails per day</div><div style="font-size:11px;color:var(--muted)">System pauses after this many sends</div></div>
@@ -393,7 +402,7 @@ var importSel=new Set();
 var currentReview=null;
 var hideLowFit=true;
 
-var NICHES=[
+var NICHES_EN=[
   {label:'🕵️ Investigation',   query:'exposing investigation youtube story'},
   {label:'🎬 Mini Documentary', query:'mini documentary short film youtube'},
   {label:'⚖️ True Crime',       query:'true crime case documentary youtube'},
@@ -407,6 +416,23 @@ var NICHES=[
   {label:'💰 Finance / Scam',   query:'scam exposed money story investigation'},
   {label:'🎭 Creator Story',    query:'creator rise fall story documentary'},
 ];
+var NICHES_DE=[
+  {label:'🕵️ Investigation',   query:'aufgedeckt investigation dokumentation youtube'},
+  {label:'🎬 Mini Documentary', query:'mini dokumentation kurzfilm youtube'},
+  {label:'⚖️ True Crime',       query:'true crime fall dokumentation deutsch'},
+  {label:'📜 Dark History',     query:'dunkle geschichte unerzählte geschichte doku'},
+  {label:'🌍 Travel Doc',       query:'reise dokumentation reportage unterwegs'},
+  {label:'🎙️ Video Essay',      query:'video essay analyse deep dive deutsch'},
+  {label:'😤 Drama / Expose',   query:'skandal aufgedeckt drama story youtube'},
+  {label:'🏙️ City / Place',     query:'stadt dokumentation geheime orte erkunden'},
+  {label:'💀 Cold Case',        query:'cold case ungelöst mysterium dokumentation'},
+  {label:'🧠 Psychology',       query:'psychologie verhalten analyse erklärt'},
+  {label:'💰 Finance / Scam',   query:'betrug aufgedeckt geld story investigation'},
+  {label:'🎭 Creator Story',    query:'creator aufstieg fall story dokumentation'},
+];
+function currentNiches(){
+  return (settings.searchLanguage==='en') ? NICHES_EN : NICHES_DE;
+}
 
 // ── LEAD SCORING: niche tier + sponsoring signals + sub range ──
 // Tier 1 = highest RPM potential (finance/business/software/B2B), Tier 2 = mid (tech/education/doc/auto/health),
@@ -632,10 +658,18 @@ function loadUI(){
   document.getElementById('inp-sig-insta').value=settings.instagramUrl||'';
   document.getElementById('inp-sig-yt').value=settings.youtubeUrl||'';
   document.getElementById('inp-sig-impressum').value=settings.impressumUrl||'';
+  document.getElementById('inp-searchlang').value=settings.searchLanguage||'de';
   document.getElementById('bc').textContent=blocked.length;
   var tw=document.getElementById('toggle-wk');
   WK_PAUSE?tw.classList.add('on'):tw.classList.remove('on');
   updateGmail();
+}
+
+function saveSearchLang(){
+  settings.searchLanguage=document.getElementById('inp-searchlang').value;
+  saveSettings();
+  buildChips();
+  showToast('Suchsprache: '+(settings.searchLanguage==='de'?'Deutsch':settings.searchLanguage==='en'?'Englisch':'Beides'));
 }
 
 function saveSignature(){
@@ -706,7 +740,7 @@ function exportCSV(){
 }
 
 function buildChips(){
-  document.getElementById('chips').innerHTML=NICHES.map(function(n,i){
+  document.getElementById('chips').innerHTML=currentNiches().map(function(n,i){
     return '<button class="chip" onclick="toggleChip('+i+',this)">'+n.label+'</button>';
   }).join('');
 }
@@ -722,7 +756,7 @@ async function doSearch(){
   var kw=document.getElementById('kw').value.trim();
   var max=parseInt(document.getElementById('smax').value);
   var queries=[];
-  activeChips.forEach(function(i){queries.push({q:NICHES[i].query,label:NICHES[i].label});});
+  activeChips.forEach(function(i){var N=currentNiches();queries.push({q:N[i].query,label:N[i].label});});
   if(kw)queries.push({q:kw,label:null});
   if(!queries.length){errEl.textContent='Select a niche or enter a keyword';errEl.style.display='block';return;}
   var btn=document.getElementById('btn-search');
@@ -787,10 +821,11 @@ async function findSimilarChannels(){
       videoTitles=(vd.items||[]).map(function(it){return it.snippet.title;});
     }
     statusEl.textContent='Generiere passende Suchbegriffe...';
+    var langInstruction = settings.searchLanguage==='en' ? 'in English' : settings.searchLanguage==='any' ? 'in English or German, whichever fits the channel better' : 'in German (native German phrasing, not translated word-for-word)';
     var prompt='Reference YouTube channel: "'+chTitle+'" ('+fmtN(chSubs)+' subscribers)\n'
       +'Channel description: '+chDesc.slice(0,300)+'\n'
       +'Recent video titles:\n'+videoTitles.map(function(t){return '- '+t;}).join('\n')+'\n\n'
-      +'Based on this channel\'s content style, format, and niche, generate 5 short YouTube search queries (3-6 words each, in English) that would surface OTHER, DIFFERENT channels with a similar style/format/production quality — useful for finding cold-outreach leads for a video editor. Focus on style/format similarity (e.g. "high production truck vlog", "narrative documentary storytelling"), not just the exact topic.\n\n'
+      +'Based on this channel\'s content style, format, and niche, generate 5 short YouTube search queries (3-6 words each, '+langInstruction+') that would surface OTHER, DIFFERENT channels with a similar style/format/production quality — useful for finding cold-outreach leads for a video editor. Focus on style/format similarity (e.g. "high production truck vlog", "narrative documentary storytelling"), not just the exact topic.\n\n'
       +'Reply ONLY with a valid JSON array of strings, e.g. ["query one","query two","query three","query four","query five"]';
     var ar=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
@@ -818,7 +853,10 @@ async function executeSearch(queries,max,errEl,resultsElId){
   try{
     var cidSet=new Set();var cidMap={};
     for(var q=0;q<queries.length;q++){
-      var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q='+encodeURIComponent(queries[q].q)+'&maxResults='+perQ+'&relevanceLanguage=en&key='+settings.ytKey);
+      var langParam = settings.searchLanguage==='en' ? '&relevanceLanguage=en'
+                    : settings.searchLanguage==='any' ? ''
+                    : '&relevanceLanguage=de&regionCode=DE';
+      var vr=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q='+encodeURIComponent(queries[q].q)+'&maxResults='+perQ+langParam+'&key='+settings.ytKey);
       addYtUnits(100);
       var vd=await vr.json();
       if(vd.error)throw new Error(vd.error.message);
